@@ -101,7 +101,8 @@ echo "$TASK" | quill exec [flags] -
   `.gitignore` inside the workspace; global excludes are not read. Quill parses them
   itself and never runs `git`, because a hostile repository's git config can run commands
   in Quill's process, which holds the API key. An explicit path into an ignored directory
-  is still searched.
+  is still searched. One call loads at most 5,000 rules and skips further ignore files, and
+  glob patterns are capped at 1,024 bytes, so hostile repositories cannot stall a search.
 - Tool output over 30,000 bytes keeps the first and last 15,000 bytes around a marker
   giving the number of bytes left out. The same output is always cut the same way, so the
   cache stays valid.

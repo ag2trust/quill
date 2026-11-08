@@ -10,18 +10,35 @@ import (
 // Within a segment the syntax is path.Match (* ? [...] and \ escapes); a "**"
 // segment matches zero or more whole segments.
 
-const maxGlobAlternatives = 64
+const (
+	maxGlobAlternatives = 64
+	maxGlobLen          = 1024
+)
 
-// splitPattern splits p into segments, collapsing runs of "**".
+// splitPattern splits p into segments, collapsing runs of "**" and rewriting
+// the shell's negated class [!...] to path.Match's [^...].
 func splitPattern(p string) []string {
 	var segs []string
 	for _, s := range strings.Split(p, "/") {
 		if s == "**" && len(segs) > 0 && segs[len(segs)-1] == "**" {
 			continue
 		}
-		segs = append(segs, s)
+		segs = append(segs, negatedClass(s))
 	}
 	return segs
+}
+
+func negatedClass(s string) string {
+	if !strings.Contains(s, "[!") {
+		return s
+	}
+	b := []byte(s)
+	for i := 1; i < len(b); i++ {
+		if b[i] == '!' && b[i-1] == '[' && (i < 2 || b[i-2] != '\\') {
+			b[i] = '^'
+		}
+	}
+	return string(b)
 }
 
 // validSegments reports whether every segment is valid path.Match syntax.
@@ -35,29 +52,35 @@ func validSegments(segs []string) bool {
 }
 
 // matchSegs reports whether the name segments match the pattern segments.
+// It is the greedy wildcard algorithm with "**" as the star: only the most
+// recent "**" is retried, so it runs in O(len(pat)*len(name)) segment matches
+// however many "**" segments the pattern has.
 func matchSegs(pat, name []string) bool {
-	for len(pat) > 0 {
-		if pat[0] == "**" {
-			pat = pat[1:]
-			if len(pat) == 0 {
-				return true
+	p, n := 0, 0
+	star, mark := -1, 0
+	for n < len(name) {
+		if p < len(pat) && pat[p] == "**" {
+			star, mark = p, n
+			p++
+			continue
+		}
+		if p < len(pat) {
+			if ok, _ := path.Match(pat[p], name[n]); ok {
+				p++
+				n++
+				continue
 			}
-			for i := 0; i <= len(name); i++ {
-				if matchSegs(pat, name[i:]) {
-					return true
-				}
-			}
+		}
+		if star < 0 {
 			return false
 		}
-		if len(name) == 0 {
-			return false
-		}
-		if ok, _ := path.Match(pat[0], name[0]); !ok {
-			return false
-		}
-		pat, name = pat[1:], name[1:]
+		p = star + 1
+		mark++
+		n = mark
 	}
-	return len(name) == 0
+	// A "**" left over here would match zero segments at the end, but a
+	// trailing "**" matches only what is inside: foo/** does not match foo.
+	return p == len(pat)
 }
 
 // expandBraces expands {a,b} alternatives, including nested ones.
@@ -111,6 +134,9 @@ func compileGlob(p string) (fileGlob, error) {
 	p = strings.TrimPrefix(strings.TrimPrefix(p, "./"), "/")
 	if p == "" {
 		return nil, errors.New("empty pattern")
+	}
+	if len(p) > maxGlobLen {
+		return nil, errors.New("pattern too long")
 	}
 	alts, err := expandBraces(p)
 	if err != nil {
