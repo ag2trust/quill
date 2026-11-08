@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"quill/internal/proc"
@@ -26,11 +27,19 @@ func (s *shell) Run(ctx context.Context, command string) Result {
 	content := out.String()
 	switch {
 	case timedOut:
-		return Result{Content: fmt.Sprintf("%s\n[killed after %s timeout]", content, s.timeout), IsError: true}
+		return Result{Content: withMarker(content, fmt.Sprintf("[killed after %s timeout]", s.timeout)), IsError: true}
 	case err != nil && ctx.Err() != nil:
-		return Result{Content: content + "\n[cancelled]", IsError: true}
+		return Result{Content: withMarker(content, "[cancelled]"), IsError: true}
 	case err != nil:
-		return Result{Content: fmt.Sprintf("%s\n[shell error: %v]", content, err), IsError: true}
+		return Result{Content: withMarker(content, fmt.Sprintf("[shell error: %v]", err)), IsError: true}
 	}
-	return Result{Content: fmt.Sprintf("%s\n[exit code %d]", content, code)}
+	return Result{Content: withMarker(content, fmt.Sprintf("[exit code %d]", code))}
+}
+
+// withMarker appends marker on its own line.
+func withMarker(content, marker string) string {
+	if content != "" && !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	return content + marker
 }

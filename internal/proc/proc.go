@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -16,12 +17,15 @@ import (
 // command times out or is cancelled.
 const killGrace = 2 * time.Second
 
-// waitDelay bounds how long Run waits for output after the shell exits, so a
-// background child holding the output pipe cannot block it.
-const waitDelay = 2 * time.Second
+// drainWait bounds how long Run waits for end of output after the shell
+// exits, so a background child holding the output pipe cannot block it.
+const drainWait = 2 * time.Second
 
 // Runner runs commands in dir with env, each in a new process group. Groups
 // that may still have live members are recorded until KillAll.
+//
+// Known limitation: a command that leaves its group (setsid, set -m job
+// control) is not tracked and survives KillAll.
 type Runner struct {
 	dir string
 	env []string
@@ -40,6 +44,10 @@ func NewRunner(dir string, env []string) *Runner {
 // done, the group gets SIGTERM, then SIGKILL after 2 s. timedOut reports the
 // timeout; a cancelled ctx is returned as err. A command killed by a signal
 // reports exit code 128+signal; exitCode is -1 when no code is available.
+//
+// Background children may outlive Run and keep writing: their output is
+// drained and discarded (never closed on them), and out is never written
+// after Run returns.
 func (r *Runner) Run(ctx context.Context, command string, timeout time.Duration, out io.Writer) (exitCode int, timedOut bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return -1, false, err
@@ -47,22 +55,40 @@ func (r *Runner) Run(ctx context.Context, command string, timeout time.Duration,
 	cmd := exec.Command("/bin/sh", "-c", command)
 	cmd.Dir = r.dir
 	cmd.Env = r.env
-	cmd.Stdout = out
-	cmd.Stderr = out
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.WaitDelay = waitDelay
+
+	// Our own pipe (an *os.File, so exec starts no copy goroutine and never
+	// closes the read end on a background child still writing).
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return -1, false, err
+	}
+	cmd.Stdout = pw
+	cmd.Stderr = pw
 
 	// Start and record under the lock so a concurrent KillAll cannot miss
 	// the new group.
 	r.mu.Lock()
 	r.pruneLocked()
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	if err != nil {
 		r.mu.Unlock()
+		pr.Close()
+		pw.Close()
 		return -1, false, err
 	}
 	pgid := cmd.Process.Pid
 	r.groups[pgid] = struct{}{}
 	r.mu.Unlock()
+	pw.Close()
+
+	sink := &switchWriter{w: out}
+	drained := make(chan struct{})
+	go func() {
+		io.Copy(sink, pr) // ends at EOF: every holder of the write end gone
+		pr.Close()
+		close(drained)
+	}()
 
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
@@ -85,9 +111,19 @@ func (r *Runner) Run(ctx context.Context, command string, timeout time.Duration,
 	if timedOut || err != nil {
 		signalGroup(pgid, syscall.SIGTERM)
 		waitGone(pgid, killGrace)
-		signalGroup(pgid, syscall.SIGKILL)
+		if groupAlive(pgid) {
+			signalGroup(pgid, syscall.SIGKILL)
+		}
 		<-done
 		waitErr = nil
+	}
+
+	select {
+	case <-drained:
+	case <-time.After(drainWait):
+	}
+	if werr := sink.detach(); err == nil && werr != nil {
+		err = werr
 	}
 
 	r.mu.Lock()
@@ -104,7 +140,7 @@ func (r *Runner) Run(ctx context.Context, command string, timeout time.Duration,
 		}
 	}
 	var exitErr *exec.ExitError
-	if err == nil && waitErr != nil && !errors.As(waitErr, &exitErr) && !errors.Is(waitErr, exec.ErrWaitDelay) {
+	if err == nil && waitErr != nil && !errors.As(waitErr, &exitErr) {
 		err = waitErr
 	}
 	return exitCode, timedOut, err
@@ -112,9 +148,11 @@ func (r *Runner) Run(ctx context.Context, command string, timeout time.Duration,
 
 // KillAll sends SIGTERM to every recorded group, waits up to grace for them
 // to exit, and sends SIGKILL to survivors. Safe to call more than once and
-// concurrently with Run.
+// concurrently with Run. The Runner has no closed state: callers cancel the
+// ctx of in-flight Runs before KillAll so no new command starts after it.
 func (r *Runner) KillAll(grace time.Duration) {
 	r.mu.Lock()
+	r.pruneLocked()
 	pgids := make([]int, 0, len(r.groups))
 	for pgid := range r.groups {
 		pgids = append(pgids, pgid)
@@ -133,7 +171,9 @@ func (r *Runner) KillAll(grace time.Duration) {
 		waitGone(pgid, time.Until(deadline))
 	}
 	for _, pgid := range pgids {
-		signalGroup(pgid, syscall.SIGKILL)
+		if groupAlive(pgid) {
+			signalGroup(pgid, syscall.SIGKILL)
+		}
 	}
 }
 
@@ -176,4 +216,33 @@ func waitGone(pgid int, d time.Duration) {
 	for groupAlive(pgid) && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// switchWriter forwards writes to w until detach, then discards them. A
+// write error from w also switches it to discarding, so the pipe keeps
+// draining and children never see EPIPE.
+type switchWriter struct {
+	mu  sync.Mutex
+	w   io.Writer
+	err error
+}
+
+func (s *switchWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.w != nil {
+		if _, err := s.w.Write(p); err != nil {
+			s.err, s.w = err, nil
+		}
+	}
+	return len(p), nil
+}
+
+// detach stops all further writes to w and returns its first write error.
+// After detach returns, w is never written again.
+func (s *switchWriter) detach() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.w = nil
+	return s.err
 }

@@ -140,9 +140,7 @@ func TestRunCancelKillsGroup(t *testing.T) {
 	var out syncBuffer
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		for !strings.Contains(out.String(), "\n") {
-			time.Sleep(10 * time.Millisecond)
-		}
+		waitForLine(&out)
 		cancel()
 	}()
 	_, timedOut, err := r.Run(ctx, "echo $$; sleep 30 & sleep 30", time.Minute, &out)
@@ -185,6 +183,30 @@ func TestBackgroundDoesNotBlock(t *testing.T) {
 	r.KillAll(time.Second) // safe twice
 }
 
+func TestBackgroundWriterKeepsRunning(t *testing.T) {
+	r := newRunner(t)
+	var out bytes.Buffer
+	start := time.Now()
+	code, _, err := r.Run(context.Background(), "(while true; do echo log; sleep 0.2; done) & echo hi", time.Minute, &out)
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("took %v", elapsed)
+	}
+	if code != 0 || err != nil || !strings.HasPrefix(out.String(), "hi\n") {
+		t.Fatalf("got (%d, %v, %q)", code, err, out.String())
+	}
+	got := out.String() // Run must not write to out after returning
+	pgid := onlyGroup(t, r)
+	time.Sleep(1500 * time.Millisecond)
+	if err := syscall.Kill(-pgid, 0); err != nil {
+		t.Fatalf("background writer died after Run returned: %v", err)
+	}
+	if out.String() != got {
+		t.Fatalf("out changed after Run returned: %q -> %q", got, out.String())
+	}
+	r.KillAll(time.Second)
+	gone(t, pgid)
+}
+
 func TestKillAllSigkillsSurvivors(t *testing.T) {
 	r := newRunner(t)
 	if _, _, err := r.Run(context.Background(), `(trap "" TERM; while :; do sleep 0.05; done) >/dev/null 2>&1 &`, time.Minute, &bytes.Buffer{}); err != nil {
@@ -206,9 +228,7 @@ func TestKillAllDuringRun(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for !strings.Contains(out.String(), "\n") {
-			time.Sleep(10 * time.Millisecond)
-		}
+		waitForLine(&out)
 		r.KillAll(time.Second)
 	}()
 	start := time.Now()
@@ -228,6 +248,14 @@ func TestSignalGuards(t *testing.T) {
 		if signalGroup(pgid, 0) {
 			t.Errorf("signalGroup(%d) was sent", pgid)
 		}
+	}
+}
+
+// waitForLine waits up to 5 s for a newline in out.
+func waitForLine(out *syncBuffer) {
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(out.String(), "\n") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

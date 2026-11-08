@@ -19,11 +19,32 @@ func newTestShell(t *testing.T, env []string, timeout time.Duration) Shell {
 
 func TestShellExitCode(t *testing.T) {
 	sh := newTestShell(t, []string{"PATH=/usr/bin:/bin"}, time.Minute)
-	if got := sh.Run(context.Background(), "echo hi"); got != (Result{Content: "hi\n\n[exit code 0]"}) {
+	if got := sh.Run(context.Background(), "echo hi"); got != (Result{Content: "hi\n[exit code 0]"}) {
 		t.Fatalf("got %+v", got)
 	}
-	if got := sh.Run(context.Background(), "echo bad >&2; exit 2"); got != (Result{Content: "bad\n\n[exit code 2]"}) {
+	if got := sh.Run(context.Background(), "echo bad >&2; exit 2"); got != (Result{Content: "bad\n[exit code 2]"}) {
 		t.Fatalf("non-zero exit: got %+v", got)
+	}
+}
+
+func TestShellMarkerSeparator(t *testing.T) {
+	sh := newTestShell(t, []string{"PATH=/usr/bin:/bin"}, time.Minute)
+	for cmd, want := range map[string]string{
+		"true":         "[exit code 0]",
+		"printf abc":   "abc\n[exit code 0]",
+		"printf 'a\n'": "a\n[exit code 0]",
+	} {
+		if got := sh.Run(context.Background(), cmd); got != (Result{Content: want}) {
+			t.Errorf("%s: got %q, want %q", cmd, got.Content, want)
+		}
+	}
+	if got := newTestShell(t, []string{"PATH=/usr/bin:/bin"}, 200*time.Millisecond).Run(context.Background(), "sleep 30"); got.Content != "[killed after 200ms timeout]" {
+		t.Errorf("timeout with no output: got %q", got.Content)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := sh.Run(ctx, "true"); got != (Result{Content: "[cancelled]", IsError: true}) {
+		t.Errorf("cancelled with no output: got %+v", got)
 	}
 }
 
