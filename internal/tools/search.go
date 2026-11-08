@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -40,11 +39,14 @@ func clipLine(s string) string {
 }
 
 // search walks from path in lexical order and reports matching lines as
-// relpath:line: text. It opens only regular files and never follows symlinks.
+// relpath:line: text, or with output_mode "files" each matching file once.
+// It opens only regular files, never follows symlinks, and skips ignored paths.
 func (r *Registry) search(ctx context.Context, input json.RawMessage) Result {
 	var in struct {
-		Pattern *string `json:"pattern"`
-		Path    *string `json:"path"`
+		Pattern    *string `json:"pattern"`
+		Path       *string `json:"path"`
+		Glob       *string `json:"glob"`
+		OutputMode *string `json:"output_mode"`
 	}
 	if err := decode(input, &in); err != nil {
 		return errResult("invalid input: %v", err)
@@ -55,6 +57,22 @@ func (r *Registry) search(ctx context.Context, input json.RawMessage) Result {
 	re, err := regexp.Compile(*in.Pattern)
 	if err != nil {
 		return errResult("invalid pattern: %v", err)
+	}
+	files := false
+	if in.OutputMode != nil {
+		switch *in.OutputMode {
+		case "content":
+		case "files":
+			files = true
+		default:
+			return errResult("invalid input: output_mode must be content or files")
+		}
+	}
+	var g fileGlob
+	if in.Glob != nil {
+		if g, err = compileGlob(*in.Glob); err != nil {
+			return errResult("invalid glob: %v", err)
+		}
 	}
 	p := "."
 	if in.Path != nil {
@@ -68,34 +86,11 @@ func (r *Registry) search(ctx context.Context, input json.RawMessage) Result {
 	var out strings.Builder
 	n := 0
 	more := false
-	walkErr := filepath.WalkDir(start, func(path string, d fs.DirEntry, err error) error {
-		if cerr := ctx.Err(); cerr != nil {
-			return cerr
-		}
-		if err != nil {
-			if path == start {
-				return err
-			}
-			if d != nil && d.IsDir() {
-				return fs.SkipDir
-			}
+	walkErr := walkFiles(ctx, r.workspace, start, func(path, rel string) error {
+		if g != nil && !g.match(relTo(start, path)) {
 			return nil
 		}
-		if d.IsDir() {
-			if d.Name() == ".git" {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !d.Type().IsRegular() { // symlinks, FIFOs, devices, sockets
-			return nil
-		}
-		rel, err := filepath.Rel(r.workspace, path)
-		if err != nil {
-			return nil
-		}
-		rel = filepath.ToSlash(rel)
-		return searchFile(ctx, path, rel, re, &out, &n, &more)
+		return searchFile(ctx, path, rel, re, files, &out, &n, &more)
 	})
 	if walkErr != nil && !errors.Is(walkErr, errSearchDone) {
 		return errResult("search: %v", walkErr)
@@ -105,12 +100,28 @@ func (r *Registry) search(ctx context.Context, input json.RawMessage) Result {
 	}
 	res := strings.TrimSuffix(out.String(), "\n")
 	if more {
-		res += "\n[stopped after 200 matches]"
+		if files {
+			res += "\n[stopped after 200 files]"
+		} else {
+			res += "\n[stopped after 200 matches]"
+		}
 	}
 	return Result{Content: res}
 }
 
-func searchFile(ctx context.Context, path, rel string, re *regexp.Regexp, out *strings.Builder, n *int, more *bool) error {
+// relTo returns path relative to start as a slash path; for a file start, its name.
+func relTo(start, path string) string {
+	if path == start {
+		return filepath.Base(path)
+	}
+	rel, err := filepath.Rel(start, path)
+	if err != nil {
+		return filepath.Base(path)
+	}
+	return filepath.ToSlash(rel)
+}
+
+func searchFile(ctx context.Context, path, rel string, re *regexp.Regexp, files bool, out *strings.Builder, n *int, more *bool) error {
 	// O_NONBLOCK and O_NOFOLLOW guard against a file swapped for a FIFO or symlink after the walk saw it.
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
@@ -148,8 +159,67 @@ func searchFile(ctx context.Context, path, rel string, re *regexp.Regexp, out *s
 			*more = true
 			return errSearchDone
 		}
-		out.WriteString(rel + ":" + strconv.Itoa(line) + ": " + clipLine(text) + "\n")
 		*n++
+		if files {
+			out.WriteString(rel + "\n")
+			return nil
+		}
+		out.WriteString(rel + ":" + strconv.Itoa(line) + ": " + clipLine(text) + "\n")
 	}
 	return nil
+}
+
+const globMaxFiles = 500
+
+// glob lists regular files under path whose path relative to it matches pattern,
+// in lexical walk order, skipping .git, symlinks, and ignored paths.
+func (r *Registry) glob(ctx context.Context, input json.RawMessage) Result {
+	var in struct {
+		Pattern *string `json:"pattern"`
+		Path    *string `json:"path"`
+	}
+	if err := decode(input, &in); err != nil {
+		return errResult("invalid input: %v", err)
+	}
+	if in.Pattern == nil {
+		return errResult("invalid input: pattern is required")
+	}
+	g, err := compileGlob(*in.Pattern)
+	if err != nil {
+		return errResult("invalid pattern: %v", err)
+	}
+	p := "."
+	if in.Path != nil {
+		p = *in.Path
+	}
+	start, err := Resolve(r.workspace, p)
+	if err != nil {
+		return errResult("%v", err)
+	}
+	var out strings.Builder
+	n := 0
+	more := false
+	walkErr := walkFiles(ctx, r.workspace, start, func(path, rel string) error {
+		if !g.match(relTo(start, path)) {
+			return nil
+		}
+		if n >= globMaxFiles {
+			more = true
+			return errSearchDone
+		}
+		n++
+		out.WriteString(rel + "\n")
+		return nil
+	})
+	if walkErr != nil && !errors.Is(walkErr, errSearchDone) {
+		return errResult("glob: %v", walkErr)
+	}
+	if n == 0 {
+		return Result{Content: "no files"}
+	}
+	res := strings.TrimSuffix(out.String(), "\n")
+	if more {
+		res += "\n[stopped after 500 files]"
+	}
+	return Result{Content: res}
 }
