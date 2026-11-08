@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -23,7 +24,16 @@ var (
 	buildOnce sync.Once
 	quillBin  string
 	buildErr  error
+	buildDir  string
 )
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if buildDir != "" {
+		os.RemoveAll(buildDir)
+	}
+	os.Exit(code)
+}
 
 // live must be the first call of every test. It skips unless both the key and
 // QUILL_LIVE=1 are present, then builds the binary once.
@@ -38,11 +48,11 @@ func live(t *testing.T) string {
 			buildErr = err
 			return
 		}
+		buildDir = dir
 		quillBin = filepath.Join(dir, "quill")
 		b := exec.Command("go", "build", "-o", quillBin, "quill/cmd/quill")
 		if out, err := b.CombinedOutput(); err != nil {
-			buildErr = err
-			t.Logf("build output: %s", out)
+			buildErr = fmt.Errorf("%w: %s", err, out)
 		}
 	})
 	if buildErr != nil {
@@ -159,12 +169,21 @@ func TestLiveWriteFile(t *testing.T) {
 func TestLiveCacheReads(t *testing.T) {
 	bin := live(t)
 	ws := t.TempDir()
-	r := run(t, bin, "Create a.txt containing a, then read it back with the read tool, then create b.txt containing b. Reply done.", ws, "")
+	// About 24 KB of filler guidance (the cap is 32 KB) puts the cached
+	// prefix well above the model's minimum cacheable length.
+	line := "Prefer small, focused changes and keep names descriptive and consistent.\n"
+	guidance := "# Guidance\n" + strings.Repeat(line, 24000/len(line))
+	if err := os.WriteFile(filepath.Join(ws, "AGENTS.md"), []byte(guidance), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := run(t, bin, "List the files in the workspace with the shell, then create a.txt containing a. Reply done.", ws, "")
 	wantExit(t, r, 0)
-	c := completed(r)
-	u, _ := c["usage"].(map[string]any)
-	if cr, _ := u["cache_read"].(float64); cr <= 0 {
-		t.Errorf("usage.cache_read = %v, want > 0 (usage: %v)", u["cache_read"], u)
+	u, _ := completed(r)["usage"].(map[string]any)
+	cw, _ := u["cache_write"].(float64)
+	cr, _ := u["cache_read"].(float64)
+	t.Logf("cache_write=%v cache_read=%v", cw, cr)
+	if cr <= 0 {
+		t.Errorf("usage.cache_read = %v, want > 0; cache_write occurred: %v (usage: %v)", cr, cw > 0, u)
 	}
 }
 
@@ -184,9 +203,9 @@ func TestLiveResume(t *testing.T) {
 func TestLiveResumeAfterInterrupted(t *testing.T) {
 	bin := live(t)
 	ws, sess := t.TempDir(), sessionPath(t)
-	t.Cleanup(func() { exec.Command("pkill", "-f", "sleep 20").Run() })
+	t.Cleanup(func() { exec.Command("pkill", "-f", "sleep 23.7").Run() })
 
-	cmd := quillCmd(bin, "Run exactly this shell command and nothing else: sleep 20", ws, sess)
+	cmd := quillCmd(bin, "Run exactly this shell command and nothing else: sleep 23.7", ws, sess)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
