@@ -3,7 +3,7 @@
 Status: proof of concept, built 2026-11-08. Started 2026-10-31 as a handoff for the next
 agent. Not ready for production; see the safety baseline.
 
-This repository is private. Never commit API keys, tokens, customer data, or run transcripts.
+This repository is public. Never commit API keys, tokens, customer data, or run transcripts.
 
 Open questions are in [`DISCUSSION.md`](DISCUSSION.md). Anything not listed under "Decided"
 below is a proposal, not a decision. When a question is decided, move it here with the date.
@@ -31,12 +31,12 @@ handling one prompt is a **run**.
 
 - Name: Quill. The binary is `quill`.
 - Language: Go, for official SDKs, few dependencies, one static binary, and fast builds.
-- Private, separate repo.
+- Separate repo. Public since 2026-11-08 (`github.com/ag2trust/quill`).
 - No UI. Quill is headless only, with no terminal UI, chat, or permission prompts.
 - Quill is unaware of its callers. It has no knowledge of any orchestrator or hosted product,
   and no caller-specific code, names, or concepts. Callers adapt to Quill's generic interface.
 - Very basic scope, with high standards on safety. No convenience features.
-- Being private is not a security control. The main threat is prompt injection from hostile
+- Repo visibility is not a security control. The main threat is prompt injection from hostile
   repositories, and the binary runs beside untrusted code. Rely on containment.
 
 ### Provider (2026-11-05)

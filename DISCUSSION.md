@@ -32,7 +32,7 @@ Claude only for now (decided). Remaining:
 2. What network access do tools get? Must package installs and test services be reachable?
 3. How is the workspace boundary enforced in Quill and in the container?
 4. What does the adversarial test suite contain, and does it block every release?
-5. Who performs independent security review, given the code is private?
+5. Who performs independent security review?
 6. What may be logged, and how long are logs retained?
 7. Which actions need a hard block in every profile, for example pushing to Git?
 
@@ -45,7 +45,7 @@ Lookups, not discussions.
 2. Does hitting a workspace spend limit return 402, or a 400 identified only by its message?
    If 400, map it to `billing`.
 3. Check the prior-art table against official docs, especially Claude Code resume.
-4. Check `quill` for name collisions before anything goes public.
+4. Check `quill` for name collisions; the repo went public on 2026-11-08.
 5. Does the API accept consecutive user messages? Resuming after SIGTERM sends the saved
    tool results, then the prompt, as two user messages. `TestLiveResumeAfterInterrupted`
    checks this.
