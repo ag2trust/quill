@@ -1,25 +1,77 @@
 package tools
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 )
 
 // maxFileBytes is the largest file read or edit will load.
 const maxFileBytes = 10 << 20
 
-// checkRegular rejects non-regular files (e.g. FIFOs) and oversized files before reading.
-func checkRegular(st os.FileInfo, path string) (Result, bool) {
-	if !st.Mode().IsRegular() {
-		return errResult("not a regular file: %s", path), false
+// openRegular opens p without blocking and without following a final
+// symlink, then rejects anything but a regular file, so a FIFO or device
+// cannot hang a tool. display is the path as the model gave it.
+func openRegular(p, display string, flag int, perm os.FileMode) (*os.File, os.FileInfo, error) {
+	f, err := os.OpenFile(p, flag|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, perm)
+	if errors.Is(err, syscall.ENXIO) {
+		// A FIFO with no reader, opened for writing.
+		return nil, nil, fmt.Errorf("not a regular file: %s", display)
 	}
+	if err != nil {
+		return nil, nil, err
+	}
+	st, err := f.Stat()
+	switch {
+	case err != nil:
+	case st.IsDir():
+		err = fmt.Errorf("%s is a directory", display)
+	case !st.Mode().IsRegular():
+		err = fmt.Errorf("not a regular file: %s", display)
+	}
+	if err != nil {
+		f.Close()
+		return nil, nil, err
+	}
+	return f, st, nil
+}
+
+// readRegular reads a regular file of at most maxFileBytes.
+func readRegular(p, display string) ([]byte, error) {
+	f, st, err := openRegular(p, display, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
 	if st.Size() > maxFileBytes {
-		return errResult("file too large: %s (%d bytes)", path, st.Size()), false
+		return nil, fmt.Errorf("file too large: %s (%d bytes)", display, st.Size())
 	}
-	return Result{}, true
+	b, err := io.ReadAll(io.LimitReader(f, maxFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > maxFileBytes {
+		return nil, fmt.Errorf("file too large: %s (over %d bytes)", display, maxFileBytes)
+	}
+	return b, nil
+}
+
+// writeRegular creates or overwrites a regular file with data.
+func writeRegular(p, display string, data []byte) error {
+	f, _, err := openRegular(p, display, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 func (r *Registry) read(input []byte) Result {
@@ -44,17 +96,7 @@ func (r *Registry) read(input []byte) Result {
 	if err != nil {
 		return errResult("%v", err)
 	}
-	st, err := os.Stat(p)
-	if err != nil {
-		return errResult("%v", err)
-	}
-	if st.IsDir() {
-		return errResult("%s is a directory", *in.Path)
-	}
-	if res, ok := checkRegular(st, *in.Path); !ok {
-		return res
-	}
-	b, err := os.ReadFile(p)
+	b, err := readRegular(p, *in.Path)
 	if err != nil {
 		return errResult("%v", err)
 	}
@@ -97,7 +139,7 @@ func (r *Registry) write(input []byte) Result {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return errResult("%v", err)
 	}
-	if err := os.WriteFile(p, []byte(*in.Content), 0o644); err != nil {
+	if err := writeRegular(p, *in.Path, []byte(*in.Content)); err != nil {
 		return errResult("%v", err)
 	}
 	return Result{Content: fmt.Sprintf("wrote %d bytes to %s", len(*in.Content), *in.Path)}
@@ -123,14 +165,7 @@ func (r *Registry) edit(input []byte) Result {
 	if err != nil {
 		return errResult("%v", err)
 	}
-	st, err := os.Stat(p)
-	if err != nil {
-		return errResult("%v", err)
-	}
-	if res, ok := checkRegular(st, *in.Path); !ok {
-		return res
-	}
-	b, err := os.ReadFile(p)
+	b, err := readRegular(p, *in.Path)
 	if err != nil {
 		return errResult("%v", err)
 	}
@@ -143,7 +178,7 @@ func (r *Registry) edit(input []byte) Result {
 		return errResult("old_text matches %d places in %s; add surrounding context or set replace_all", n, *in.Path)
 	}
 	out := strings.ReplaceAll(s, *in.OldText, *in.NewText)
-	if err := os.WriteFile(p, []byte(out), st.Mode().Perm()); err != nil {
+	if err := writeRegular(p, *in.Path, []byte(out)); err != nil {
 		return errResult("%v", err)
 	}
 	return Result{Content: fmt.Sprintf("replaced %d occurrence(s)", n)}

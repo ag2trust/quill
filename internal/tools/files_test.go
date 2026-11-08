@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func run(t *testing.T, r *Registry, name string, in any) Result {
@@ -184,5 +185,22 @@ func TestReadHugeLimit(t *testing.T) {
 	os.WriteFile(filepath.Join(ws, "f"), []byte("1\n2\n"), 0o644)
 	if res := run(t, r, "read", m{"path": "f", "offset": 2, "limit": math.MaxInt}); res.IsError || res.Content != "2\n" {
 		t.Fatalf("%+v", res)
+	}
+}
+
+func TestWriteFIFOFailsFast(t *testing.T) {
+	r, ws := setup(t)
+	if err := syscall.Mkfifo(filepath.Join(ws, "fifo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan Result, 1)
+	go func() { done <- run(t, r, "write", m{"path": "fifo", "content": "x"}) }()
+	select {
+	case res := <-done:
+		if !res.IsError || res.Content != "not a regular file: fifo" {
+			t.Fatalf("%+v", res)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("write to FIFO did not return within 1 s")
 	}
 }
