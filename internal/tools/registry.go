@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 )
 
 // Profile selects which tools are exposed.
@@ -32,7 +33,6 @@ type Shell interface {
 
 // Registry dispatches tool calls for one profile and workspace.
 type Registry struct {
-	profile   Profile
 	workspace string
 	shell     Shell
 	defs      json.RawMessage
@@ -117,11 +117,11 @@ func NewRegistry(profile Profile, workspace string, shell Shell) *Registry {
 	if err != nil {
 		panic(err) // static literals; cannot fail
 	}
-	return &Registry{profile: profile, workspace: workspace, shell: shell, defs: defs, allowed: allowed}
+	return &Registry{workspace: workspace, shell: shell, defs: defs, allowed: allowed}
 }
 
 // Definitions returns the tool definitions as a JSON array, byte-identical across calls.
-func (r *Registry) Definitions() json.RawMessage { return r.defs }
+func (r *Registry) Definitions() json.RawMessage { return append(json.RawMessage(nil), r.defs...) }
 
 // Run executes a tool call. All content is capped at OutputCap.
 func (r *Registry) Run(ctx context.Context, name string, input json.RawMessage) Result {
@@ -176,7 +176,7 @@ func decode(input json.RawMessage, v any) error {
 	if err := dec.Decode(v); err != nil {
 		return err
 	}
-	if dec.More() {
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		return errors.New("unexpected trailing data")
 	}
 	return nil

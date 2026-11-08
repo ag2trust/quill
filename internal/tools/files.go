@@ -8,6 +8,20 @@ import (
 	"strings"
 )
 
+// maxFileBytes is the largest file read or edit will load.
+const maxFileBytes = 10 << 20
+
+// checkRegular rejects non-regular files (e.g. FIFOs) and oversized files before reading.
+func checkRegular(st os.FileInfo, path string) (Result, bool) {
+	if !st.Mode().IsRegular() {
+		return errResult("not a regular file: %s", path), false
+	}
+	if st.Size() > maxFileBytes {
+		return errResult("file too large: %s (%d bytes)", path, st.Size()), false
+	}
+	return Result{}, true
+}
+
 func (r *Registry) read(input []byte) Result {
 	var in struct {
 		Path   *string `json:"path"`
@@ -37,6 +51,9 @@ func (r *Registry) read(input []byte) Result {
 	if st.IsDir() {
 		return errResult("%s is a directory", *in.Path)
 	}
+	if res, ok := checkRegular(st, *in.Path); !ok {
+		return res
+	}
 	b, err := os.ReadFile(p)
 	if err != nil {
 		return errResult("%v", err)
@@ -56,7 +73,7 @@ func (r *Registry) read(input []byte) Result {
 		start = len(lines)
 	}
 	end := len(lines)
-	if in.Limit != nil && start+*in.Limit < end {
+	if in.Limit != nil && *in.Limit < end-start {
 		end = start + *in.Limit
 	}
 	return Result{Content: strings.Join(lines[start:end], "")}
@@ -106,6 +123,13 @@ func (r *Registry) edit(input []byte) Result {
 	if err != nil {
 		return errResult("%v", err)
 	}
+	st, err := os.Stat(p)
+	if err != nil {
+		return errResult("%v", err)
+	}
+	if res, ok := checkRegular(st, *in.Path); !ok {
+		return res
+	}
 	b, err := os.ReadFile(p)
 	if err != nil {
 		return errResult("%v", err)
@@ -117,10 +141,6 @@ func (r *Registry) edit(input []byte) Result {
 		return errResult("old_text not found in %s", *in.Path)
 	case n > 1 && !in.ReplaceAll:
 		return errResult("old_text matches %d places in %s; add surrounding context or set replace_all", n, *in.Path)
-	}
-	st, err := os.Stat(p)
-	if err != nil {
-		return errResult("%v", err)
 	}
 	out := strings.ReplaceAll(s, *in.OldText, *in.NewText)
 	if err := os.WriteFile(p, []byte(out), st.Mode().Perm()); err != nil {

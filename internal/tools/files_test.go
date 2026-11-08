@@ -3,9 +3,11 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -146,5 +148,41 @@ func TestSymlinkEscapeAllTools(t *testing.T) {
 	ents, _ := os.ReadDir(outside)
 	if len(ents) != 1 {
 		t.Fatalf("outside dir touched: %v", ents)
+	}
+}
+
+func TestNonRegularAndOversized(t *testing.T) {
+	r, ws := setup(t)
+	if err := syscall.Mkfifo(filepath.Join(ws, "fifo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"read", "edit"} {
+		in := m{"path": "fifo"}
+		if name == "edit" {
+			in = m{"path": "fifo", "old_text": "a", "new_text": "b"}
+		}
+		if res := run(t, r, name, in); !res.IsError || !strings.HasPrefix(res.Content, "not a regular file") {
+			t.Errorf("%s fifo: %+v", name, res)
+		}
+	}
+	f, _ := os.Create(filepath.Join(ws, "big"))
+	f.Truncate(maxFileBytes + 1)
+	f.Close()
+	for _, name := range []string{"read", "edit"} {
+		in := m{"path": "big"}
+		if name == "edit" {
+			in = m{"path": "big", "old_text": "a", "new_text": "b"}
+		}
+		if res := run(t, r, name, in); !res.IsError || !strings.HasPrefix(res.Content, "file too large: big (") {
+			t.Errorf("%s big: %+v", name, res)
+		}
+	}
+}
+
+func TestReadHugeLimit(t *testing.T) {
+	r, ws := setup(t)
+	os.WriteFile(filepath.Join(ws, "f"), []byte("1\n2\n"), 0o644)
+	if res := run(t, r, "read", m{"path": "f", "offset": 2, "limit": math.MaxInt}); res.IsError || res.Content != "2\n" {
+		t.Fatalf("%+v", res)
 	}
 }

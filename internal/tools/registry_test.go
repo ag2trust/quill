@@ -3,6 +3,8 @@ package tools
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -77,7 +79,7 @@ func TestMissingRequired(t *testing.T) {
 	}
 }
 
-func TestBlockerAndShellAndSearch(t *testing.T) {
+func TestBlockerAndNilShell(t *testing.T) {
 	r := NewRegistry(WorkspaceWrite, newWS(t), nil)
 	res := r.Run(context.Background(), BlockerTool, json.RawMessage(`{}`))
 	if !res.IsError || res.Content != "raise_blocker is handled by the run loop" {
@@ -109,6 +111,42 @@ func TestDecodeBlocker(t *testing.T) {
 	for _, in := range []string{`{"reason":"nope","summary":"s","details":"d","question":"q"}`, `{"reason":"unsafe"}`, `{"reason":"unsafe","summary":"s","details":"d","question":"q","x":1}`, `x`} {
 		if _, err := DecodeBlocker(json.RawMessage(in)); err == nil {
 			t.Errorf("expected error for %s", in)
+		}
+	}
+}
+
+func TestReadOnlyRefusesEditAndShell(t *testing.T) {
+	r := NewRegistry(ReadOnly, newWS(t), &fakeShell{})
+	for _, c := range [][2]string{{"edit", `{"path":"a","old_text":"x","new_text":"y"}`}, {"shell", `{"command":"ls"}`}} {
+		res := r.Run(context.Background(), c[0], json.RawMessage(c[1]))
+		if !res.IsError || res.Content != "unknown tool: "+c[0] {
+			t.Errorf("%s: %+v", c[0], res)
+		}
+	}
+}
+
+func TestTrailingData(t *testing.T) {
+	r := NewRegistry(WorkspaceWrite, newWS(t), nil)
+	if res := r.Run(context.Background(), "list", json.RawMessage(`{"path":"a"}}`)); !res.IsError {
+		t.Fatalf("%+v", res)
+	}
+}
+
+func TestDefinitionsCopy(t *testing.T) {
+	r := NewRegistry(ReadOnly, "/x", nil)
+	a := r.Definitions()
+	a[0] = 'X'
+	if r.Definitions()[0] != '[' {
+		t.Fatal("Definitions exposes internal slice")
+	}
+}
+
+// Changing tool definitions invalidates every cached session prefix; update these hashes deliberately.
+func TestDefinitionsGolden(t *testing.T) {
+	for p, want := range map[Profile]string{WorkspaceWrite: "45b7cd12d749191e0682417814345daf77c321bb981326c6ccd178d0118677fc", ReadOnly: "069129b6f8c506d12d3faef41fad28433f73342762cf57eebb5422ceac7794c3"} {
+		sum := sha256.Sum256(NewRegistry(p, "/x", nil).Definitions())
+		if got := hex.EncodeToString(sum[:]); got != want {
+			t.Errorf("%s: sha256 %s, want %s", p, got, want)
 		}
 	}
 }
