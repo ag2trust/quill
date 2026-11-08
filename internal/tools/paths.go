@@ -26,7 +26,10 @@ func Resolve(workspace, p string) (string, error) {
 		return "", outside
 	}
 	real, err := resolveFull(full, 0)
-	if err != nil || !within(workspace, real) {
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", p, err)
+	}
+	if !within(workspace, real) {
 		return "", outside
 	}
 	return real, nil

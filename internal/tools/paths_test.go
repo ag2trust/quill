@@ -52,13 +52,17 @@ func TestResolveEscapes(t *testing.T) {
 
 	for _, p := range []string{
 		"../x", "/etc/passwd", "link/secret.txt", "link", "filelink", "dangling",
-		"danglingdir/f.txt", "reldangling", "a/../../x", "loop1",
+		"danglingdir/f.txt", "reldangling", "a/../../x",
 		filepath.Join(ws, "link", "secret.txt"), ws + "-sibling/x",
 	} {
 		_, err := Resolve(ws, p)
 		if err == nil || !strings.Contains(err.Error(), "path outside workspace: "+p) {
 			t.Errorf("Resolve(%q) err = %v; want outside workspace", p, err)
 		}
+	}
+
+	if _, err := Resolve(ws, "loop1"); err == nil || strings.Contains(err.Error(), "outside workspace") || !strings.HasPrefix(err.Error(), "resolve loop1: ") {
+		t.Errorf("loop err = %v; want resolve error", err)
 	}
 
 	must(os.MkdirAll(filepath.Join(ws, "a"), 0o755))

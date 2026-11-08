@@ -78,7 +78,7 @@ func (c *Capped) String() string {
 		}
 	}
 	// Drop leading continuation bytes from tail.
-	for len(tail) > 0 && !utf8.RuneStart(tail[0]) {
+	for i := 0; i < utf8.UTFMax-1 && len(tail) > 0 && !utf8.RuneStart(tail[0]); i++ {
 		tail = tail[1:]
 	}
 	omitted := c.total - int64(len(head)) - int64(len(tail))

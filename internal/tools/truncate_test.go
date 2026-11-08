@@ -54,3 +54,23 @@ func TestCappedBound(t *testing.T) {
 		t.Fatal("holds more than limit")
 	}
 }
+
+func TestTruncateRuneBoundaries(t *testing.T) {
+	for _, r := range []string{"é", "€", "𝄞"} {
+		in := strings.Repeat(r, 5000)
+		for limit := 1000; limit < 1010; limit++ {
+			out := Truncate(in, limit)
+			if !utf8.ValidString(out) || !strings.Contains(out, "bytes omitted") {
+				t.Fatalf("rune %q limit %d: invalid or untruncated", r, limit)
+			}
+		}
+	}
+}
+
+func TestTruncateBinaryTailKept(t *testing.T) {
+	in := strings.Repeat("a", 500) + strings.Repeat("\x80", 100)
+	out := Truncate(in, 100)
+	if !strings.HasSuffix(out, strings.Repeat("\x80", 47)) {
+		t.Fatalf("tail wrongly consumed: %q", out)
+	}
+}
