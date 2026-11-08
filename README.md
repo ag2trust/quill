@@ -84,7 +84,8 @@ echo "$TASK" | quill exec [flags] -
   `internal/tools/registry.go`.
 - `read` returns the whole file, or `limit` lines from `offset` (1-based). `write` creates
   parent directories and overwrites. `list` is non-recursive and sorted, directories end
-  with `/`. `read` and `edit` refuse files over 10 MB and non-regular files.
+  with `/`. `read`, `write`, and `edit` refuse non-regular files, and `read` and `edit`
+  refuse files over 10 MB.
 - `edit` replaces `old_text`, which must match exactly one place unless `replace_all` is
   set. Otherwise it is a tool error saying the text was not found or how many places
   matched.
@@ -104,7 +105,9 @@ continue, the caller starts a new run with the same session file.
 - `--session FILE`: if the file exists, Quill continues from it and appends the new turn. If
   it does not exist, Quill creates it. Without `--session`, the run is one-off and nothing is
   written.
-- Quill refuses a session path inside the workspace, so the agent cannot edit its own history.
+- Quill refuses a session path inside the workspace, so the file tools cannot edit it. The
+  shell runs as the same user, so containment is the container's job (see the safety
+  baseline).
 - Format: JSON lines. The first line holds settings fixed for the session. Each later line is
   one message in Claude API format, exactly as sent or received.
 
@@ -119,6 +122,8 @@ continue, the caller starts a new run with the same session file.
   so two runs cannot share it, and creates it with mode `0600`. The file holds prompts and
   file contents; callers treat it as sensitive.
 - The file does not contain the API key, usage, or events.
+- An assistant reply with no content, and a refused turn, are not saved: the API would reject
+  them in the next request.
 
 ### Blockers (2026-11-07)
 
@@ -138,7 +143,7 @@ damage, the agent stops instead of guessing.
 
 - Quill reads `AGENTS.md` and `CLAUDE.md` from the workspace root, if present, capped at
   32 KB each. They go into the first user message, marked as repository content, never into
-  the system prompt.
+  the system prompt. When `CLAUDE.md` is the same file as `AGENTS.md`, it is included once.
 - The built-in system prompt holds Quill's safety rules and sets this precedence:
   1. Quill's safety rules always win.
   2. The task decides what to do.
@@ -150,19 +155,21 @@ damage, the agent stops instead of guessing.
 - Tools start from a clean environment: `PATH`, `HOME`, `USER`, `LANG`, `TMPDIR`, plus each
   variable named with `--env`. Quill copies the value from its own environment.
 - `--env ANTHROPIC_API_KEY` is refused.
-- `run.started` lists the names passed, so a missing variable is easy to spot.
+- `run.started` lists the names passed, so a missing variable is easy to spot. Unset or
+  empty variables are not passed and are missing from `env_passed`.
 - This stops accidental leaks only. A same-user tool can still read the key from Quill's
   process. See the safety baseline.
 
 ### Cleanup and stopping (2026-11-07)
 
 - Each shell command runs in its own process group, tracked by Quill.
-- On SIGTERM, SIGINT, or run timeout, Quill stops every command group (SIGTERM, then SIGKILL
-  after a few seconds), writes `run.completed` with status `cancelled` or `limit_reached`, and
-  exits.
+- On SIGTERM, SIGINT, SIGHUP, or run timeout, Quill stops every command group (SIGTERM, then
+  SIGKILL after a few seconds), writes `run.completed` with status `cancelled` or
+  `limit_reached`, and exits.
 - A run stopped during tool calls saves its tool results: tools that finished get their real
   results, the call in progress gets "interrupted: it may have partly run", and the rest get
-  "not run: cancelled".
+  "not run: cancelled". If Quill crashed instead, continuing the session gives every call
+  left without a result "interrupted: it may have partly run".
 - Quill removes everything it created: processes, temporary files, and temporary directories.
   The agent's changes to the workspace are the result of the task and stay.
 - Callers stop Quill with SIGTERM, and SIGKILL only if it has not exited after about 10
@@ -176,8 +183,8 @@ damage, the agent stops instead of guessing.
 - Exactly one `run.completed`, always the last line, except after SIGKILL. No `run.completed`
   means Quill crashed, except exit 2, which reports on stderr only. A Go runtime crash also
   exits 2, but normally after `run.started`, so stdout is non-empty and has no
-  `run.completed`. A SIGTERM or SIGINT before
-  the prompt is read ends Quill with no output.
+  `run.completed`. A SIGTERM, SIGINT, or SIGHUP before the prompt is read ends Quill with
+  no output.
 
 ```json
 {"type":"run.completed","status":"completed","final_text":"Fixed the flaky test by ...",
@@ -197,7 +204,7 @@ damage, the agent stops instead of guessing.
 | 3 | `limit_reached` | Steps, tokens, or time ran out |
 | 4 | `provider_error` | See `error.kind` |
 | 5 | `blocked` | Waiting for input. See `blocker` |
-| 143 | `cancelled` | Stopped by SIGTERM or SIGINT |
+| 143 | `cancelled` | Stopped by SIGTERM, SIGINT or SIGHUP |
 
 - Provider errors are classified from HTTP status and API error type only, never from text.
   Each `error` also carries `http_status`, the API's `type`, `message`, and `request_id`.
@@ -228,6 +235,8 @@ damage, the agent stops instead of guessing.
 - Reject paths that resolve outside the workspace, including through symlinks.
 - The container is the sandbox: non-root, read-only image, CPU, memory, and process limits,
   and restricted network.
+- Run Quill under an init in containers (`docker run --init` or tini) so orphaned processes
+  are reaped.
 - API keys must not reach tools. The proof of concept only keeps the key out of the tool
   environment. That is not enough, because a same-user process can inspect Quill. Before
   production, run tools as a separate user, or send model calls through a small proxy.

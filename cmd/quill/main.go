@@ -58,7 +58,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 	ew := events.NewWriter(stdout)
 	// Signals stay caught until run returns, so a second SIGTERM during
 	// cleanup cannot kill quill before run.completed.
-	sigCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	defer stopSignals()
 	ctx, cancelRun := context.WithCancel(sigCtx)
 	limitCtx, cancelLimit := context.WithTimeout(context.Background(), cfg.Timeout)
@@ -72,11 +72,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 		done    bool
 		started bool
 	)
+	envPassed := []string{} // names actually passed to tools, set with the env
 	startRun := func() {
 		started = true
 		_ = ew.RunStarted(events.RunStarted{
 			Session: cfg.SessionPath, Model: model, Effort: effort, Sandbox: sandbox,
-			Workspace: cfg.Workspace, Version: events.Version, EnvPassed: append([]string{}, cfg.EnvNames...),
+			Workspace: cfg.Workspace, Version: events.Version, EnvPassed: envPassed,
 		})
 	}
 	cleanup := func() {
@@ -104,6 +105,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 	}
 	internal := func(what string, err error) int {
 		fmt.Fprintf(stderr, "quill: internal error: %s\n", what)
+		if !started {
+			startRun()
+		}
 		return finish(events.RunCompleted{
 			Status: events.StatusInternalError,
 			Error:  &events.ErrorInfo{Kind: "internal", Message: what + ": " + err.Error()},
@@ -135,6 +139,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 		if errors.Is(err, session.ErrLocked) {
 			return usage("--session: %v", err)
 		}
+		if errors.Is(err, session.ErrEmpty) {
+			return usage("--session: session file is empty (an interrupted create); delete it if no run is using it")
+		}
 		if err != nil {
 			var syn *json.SyntaxError
 			if errors.As(err, &syn) {
@@ -161,6 +168,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 		}
 	}
 
+	// The tool environment comes before run.started, which lists the names
+	// actually passed.
+	tmpDir, err = os.MkdirTemp(getenv("TMPDIR"), "quill-run-*")
+	if err != nil {
+		return internal("create temp dir", err)
+	}
+	var env []string
+	env, envPassed = proc.BuildEnv(getenv, cfg.EnvNames, tmpDir)
+
 	startRun()
 
 	var next json.RawMessage
@@ -173,11 +189,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 		return internal("build message", err)
 	}
 
-	tmpDir, err = os.MkdirTemp(getenv("TMPDIR"), "quill-run-*")
-	if err != nil {
-		return internal("create temp dir", err)
-	}
-	runner = proc.NewRunner(cfg.Workspace, proc.BuildEnv(getenv, cfg.EnvNames, tmpDir))
+	runner = proc.NewRunner(cfg.Workspace, env)
 	registry := tools.NewRegistry(tools.Profile(sandbox), cfg.Workspace, tools.NewShell(runner, shellTimeout))
 
 	loop := &agent.Loop{

@@ -277,10 +277,10 @@ func TestE2EResumeModelMismatch(t *testing.T) {
 	}
 }
 
-// sigtermMidShell runs quill on a script whose shell call runs marker twice
-// (once in the background), sends SIGTERM once marker is running, and waits
-// up to 10 s for quill to exit. tmp is quill's TMPDIR.
-func sigtermMidShell(t *testing.T, marker string, tmp string, args ...string) (code int, lines []map[string]any, elapsed time.Duration) {
+// signalMidShell runs quill on a script whose shell call runs marker twice
+// (once in the background), sends sig once marker is running, and waits up
+// to 10 s for quill to exit. tmp is quill's TMPDIR.
+func signalMidShell(t *testing.T, sig os.Signal, marker string, tmp string, args ...string) (code int, lines []map[string]any, elapsed time.Duration) {
 	t.Helper()
 	t.Cleanup(func() { exec.Command("pkill", "-f", marker).Run() })
 	command := marker + " & " + marker
@@ -311,7 +311,7 @@ func sigtermMidShell(t *testing.T, marker string, tmp string, args ...string) (c
 		time.Sleep(20 * time.Millisecond)
 	}
 	start := time.Now()
-	cmd.Process.Signal(syscall.SIGTERM)
+	cmd.Process.Signal(sig)
 	done := make(chan []byte)
 	go func() {
 		rest, _ := io.ReadAll(stdout)
@@ -325,7 +325,7 @@ func sigtermMidShell(t *testing.T, marker string, tmp string, args ...string) (c
 	case <-time.After(10 * time.Second):
 		cmd.Process.Kill()
 		<-done
-		t.Fatal("quill did not exit within 10 s of SIGTERM")
+		t.Fatalf("quill did not exit within 10 s of %v", sig)
 	}
 	code, lines = cmd.ProcessState.ExitCode(), parseLines(t, out.String())
 	checkStream(t, code, lines)
@@ -333,14 +333,19 @@ func sigtermMidShell(t *testing.T, marker string, tmp string, args ...string) (c
 }
 
 func TestE2ESigterm(t *testing.T) {
-	const marker = "sleep 31.57"
+	for sig, marker := range map[syscall.Signal]string{syscall.SIGTERM: "sleep 31.57", syscall.SIGHUP: "sleep 31.67"} {
+		t.Run(sig.String(), func(t *testing.T) { testSignalCancels(t, sig, marker) })
+	}
+}
+
+func testSignalCancels(t *testing.T, sig syscall.Signal, marker string) {
 	tmp := t.TempDir()
-	code, lines, elapsed := sigtermMidShell(t, marker, tmp, "--workspace", t.TempDir())
+	code, lines, elapsed := signalMidShell(t, sig, marker, tmp, "--workspace", t.TempDir())
 	if code != 143 {
 		t.Fatalf("exit = %d, want 143", code)
 	}
 	if elapsed >= 10*time.Second {
-		t.Errorf("exit took %v after SIGTERM", elapsed)
+		t.Errorf("exit took %v after %v", elapsed, sig)
 	}
 	if len(lines) == 0 {
 		t.Fatal("no stdout lines")
@@ -360,7 +365,7 @@ func TestE2ESigterm(t *testing.T) {
 
 func TestE2EResumeAfterCancel(t *testing.T) {
 	ws, sess := t.TempDir(), filepath.Join(t.TempDir(), "s.jsonl")
-	code, _, elapsed := sigtermMidShell(t, "sleep 32.57", t.TempDir(), "--workspace", ws, "--session", sess)
+	code, _, elapsed := signalMidShell(t, syscall.SIGTERM, "sleep 32.57", t.TempDir(), "--workspace", ws, "--session", sess)
 	if code != 143 {
 		t.Fatalf("run 1 exit = %d, want 143", code)
 	}
@@ -444,6 +449,34 @@ func TestE2ESessionLocked(t *testing.T) {
 	r := runQuill(t, fakeapi.New(t), "more", "--workspace", ws, "--session", sess)
 	if r.code != 2 || r.stdout != "" || !strings.Contains(r.stderr, "locked") {
 		t.Errorf("exit = %d, stdout = %q, stderr = %q", r.code, r.stdout, r.stderr)
+	}
+}
+
+func TestE2ESessionEmpty(t *testing.T) {
+	sess := filepath.Join(t.TempDir(), "s.jsonl")
+	if err := os.WriteFile(sess, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := runQuill(t, fakeapi.New(t), "task", "--workspace", t.TempDir(), "--session", sess)
+	if r.code != 2 || r.stdout != "" || !strings.Contains(r.stderr, "session file is empty") || !strings.Contains(r.stderr, "delete it") {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q", r.code, r.stdout, r.stderr)
+	}
+}
+
+func TestE2EEnvPassed(t *testing.T) {
+	fake := fakeapi.New(t, fakeapi.TextReply("done", events.Usage{}))
+	cmd := quillCmd(fake, t.TempDir(), "task", "exec", "--workspace", t.TempDir(),
+		"--env", "QUILL_TEST_SET", "--env", "QUILL_TEST_UNSET", "-")
+	cmd.Env = append(cmd.Env, "QUILL_TEST_SET=1")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("run quill: %v", err)
+	}
+	lines := parseLines(t, string(out))
+	checkStream(t, cmd.ProcessState.ExitCode(), lines)
+	got, _ := json.Marshal(lines[0]["env_passed"])
+	if string(got) != `["QUILL_TEST_SET"]` {
+		t.Errorf("env_passed = %s, want [\"QUILL_TEST_SET\"]", got)
 	}
 }
 

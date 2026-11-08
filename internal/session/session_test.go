@@ -230,13 +230,13 @@ func TestCompleteLastLineMissingNewline(t *testing.T) {
 	}
 }
 
-func TestEmptyFileIsLocked(t *testing.T) {
+func TestEmptyFile(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "s")
 	if err := os.WriteFile(p, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := Open(p, testHeader()); !errors.Is(err, ErrLocked) {
-		t.Fatalf("want ErrLocked, got %v", err)
+	if _, _, err := Open(p, testHeader()); !errors.Is(err, ErrEmpty) {
+		t.Fatalf("want ErrEmpty, got %v", err)
 	}
 }
 

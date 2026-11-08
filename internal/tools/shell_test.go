@@ -83,7 +83,7 @@ func TestShellEnvClean(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-test-secret")
 	t.Setenv("SHELL_TEST_SECRET", "hidden")
 	t.Setenv("SHELL_TEST_PASSED", "visible")
-	env := proc.BuildEnv(os.Getenv, []string{"SHELL_TEST_PASSED", "ANTHROPIC_API_KEY"}, t.TempDir())
+	env, _ := proc.BuildEnv(os.Getenv, []string{"SHELL_TEST_PASSED", "ANTHROPIC_API_KEY"}, t.TempDir())
 	got := newTestShell(t, env, time.Minute).Run(context.Background(), "env")
 	if got.IsError {
 		t.Fatalf("got %+v", got)

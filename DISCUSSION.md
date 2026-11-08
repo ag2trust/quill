@@ -46,3 +46,10 @@ Lookups, not discussions.
    If 400, map it to `billing`.
 3. Check the prior-art table against official docs, especially Claude Code resume.
 4. Check `quill` for name collisions before anything goes public.
+5. Does the API accept consecutive user messages? Resuming after SIGTERM sends the saved
+   tool results, then the prompt, as two user messages. `TestLiveResumeAfterInterrupted`
+   checks this.
+6. Does a high-effort step with `max_tokens` 32,000 finish within the 10-minute per-attempt
+   timeout without streaming? If not, consider streaming.
+7. After an empty `end_turn` or a `refusal`, does resuming the session work? Quill saves
+   neither turn, so the next request may hold two consecutive user messages.

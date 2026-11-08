@@ -15,6 +15,10 @@ import (
 // ErrLocked means another run holds the session file.
 var ErrLocked = errors.New("session file is locked by another run")
 
+// ErrEmpty means the session file has no header: a create was interrupted,
+// or another run is still creating it.
+var ErrEmpty = errors.New("session file is empty")
+
 // Header is line 1 of the session file.
 type Header struct {
 	Type    string          `json:"type"`
@@ -137,8 +141,9 @@ func (s *File) load() error {
 		}
 	}
 	if valid == 0 {
-		// Empty: another run is still creating it (header not yet written).
-		return ErrLocked
+		// Empty: a create was interrupted, or another run is still creating
+		// it (header not yet written).
+		return ErrEmpty
 	}
 	lines := bytes.Split(data[:valid-1], []byte("\n"))
 	if err := json.Unmarshal(lines[0], &s.Header); err != nil {
