@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 type blk struct {
@@ -59,8 +60,12 @@ func TestFirstMessageNoGuidance(t *testing.T) {
 
 func TestFirstMessageWithGuidance(t *testing.T) {
 	w := ws(t)
-	os.WriteFile(filepath.Join(w, "AGENTS.md"), []byte("agents rules"), 0o644)
-	os.WriteFile(filepath.Join(w, "CLAUDE.md"), []byte("claude rules"), 0o644)
+	if err := os.WriteFile(filepath.Join(w, "AGENTS.md"), []byte("agents rules"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(w, "CLAUDE.md"), []byte("claude rules"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	raw, err := FirstMessage(w, "task")
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +87,9 @@ func TestFirstMessageWithGuidance(t *testing.T) {
 
 func TestGuidanceCapped(t *testing.T) {
 	w := ws(t)
-	os.WriteFile(filepath.Join(w, "AGENTS.md"), []byte(strings.Repeat("x", 40000)), 0o644)
+	if err := os.WriteFile(filepath.Join(w, "AGENTS.md"), []byte(strings.Repeat("x", 40000)), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	raw, _ := FirstMessage(w, "t")
 	g := parse(t, raw).Content[0].Text
 	if !strings.Contains(g, "x\n[truncated]\n</repository_guidance>") || strings.Count(g, "x") != 32768 {
@@ -90,11 +97,28 @@ func TestGuidanceCapped(t *testing.T) {
 	}
 }
 
+func TestGuidanceCutOnRuneBoundary(t *testing.T) {
+	w := ws(t)
+	// "a" + 2-byte runes: byte 32768 falls mid-rune.
+	if err := os.WriteFile(filepath.Join(w, "AGENTS.md"), []byte("a"+strings.Repeat("\u00e9", 20000)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := FirstMessage(w, "t")
+	g := parse(t, raw).Content[0].Text
+	if !utf8.ValidString(g) || strings.ContainsRune(g, '\uFFFD') || !strings.Contains(g, "\u00e9\n[truncated]") {
+		t.Fatal("bad cut")
+	}
+}
+
 func TestGuidanceSymlinkOutsideIgnored(t *testing.T) {
 	w := ws(t)
 	out := filepath.Join(ws(t), "secret.md")
-	os.WriteFile(out, []byte("SECRET"), 0o644)
-	os.Symlink(out, filepath.Join(w, "AGENTS.md"))
+	if err := os.WriteFile(out, []byte("SECRET"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(out, filepath.Join(w, "AGENTS.md")); err != nil {
+		t.Fatal(err)
+	}
 	raw, _ := FirstMessage(w, "t")
 	if m := parse(t, raw); len(m.Content) != 1 || strings.Contains(string(raw), "SECRET") {
 		t.Fatalf("leaked: %s", raw)
@@ -103,7 +127,9 @@ func TestGuidanceSymlinkOutsideIgnored(t *testing.T) {
 
 func TestGuidanceNonRegularIgnored(t *testing.T) {
 	w := ws(t)
-	os.Mkdir(filepath.Join(w, "AGENTS.md"), 0o755)
+	if err := os.Mkdir(filepath.Join(w, "AGENTS.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	raw, err := FirstMessage(w, "t")
 	if err != nil || len(parse(t, raw).Content) != 1 {
 		t.Fatalf("%s %v", raw, err)
@@ -122,13 +148,13 @@ func TestResumeAfterText(t *testing.T) {
 }
 
 func TestResumeAfterBlocker(t *testing.T) {
-	last := json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"x"},{"type":"tool_use","id":"t1","name":"raise_blocker","input":{}},{"type":"tool_use","id":"t2","name":"read","input":{}}]}`)
+	last := json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"x"},{"type":"tool_use","id":"t2","name":"read","input":{}},{"type":"tool_use","id":"t1","name":"raise_blocker","input":{}}]}`)
 	raw, err := ResumeMessage(last, "answer")
 	if err != nil {
 		t.Fatal(err)
 	}
 	m := parse(t, raw)
-	want := []blk{{Type: "tool_result", ToolUseID: "t1", Content: "answer"}, {Type: "tool_result", ToolUseID: "t2", Content: "not run: paused"}}
+	want := []blk{{Type: "tool_result", ToolUseID: "t2", Content: "not run: paused"}, {Type: "tool_result", ToolUseID: "t1", Content: "answer"}}
 	if len(m.Content) != 2 || m.Content[0] != want[0] || m.Content[1] != want[1] {
 		t.Fatalf("got %s", raw)
 	}

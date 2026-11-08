@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"quill/internal/tools"
 )
@@ -69,7 +70,11 @@ func readGuidance(workspace, name string) (string, bool) {
 	}
 	s := string(data)
 	if len(data) > maxGuidance {
-		s = string(data[:maxGuidance]) + "\n[truncated]"
+		cut := maxGuidance
+		for cut > 0 && !utf8.RuneStart(data[cut]) {
+			cut--
+		}
+		s = string(data[:cut]) + "\n[truncated]"
 	}
 	return s, true
 }
