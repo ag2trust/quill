@@ -2,8 +2,9 @@ module quill
 
 go 1.26
 
+require github.com/anthropics/anthropic-sdk-go/v2 v2.7.0
+
 require (
-	github.com/anthropics/anthropic-sdk-go/v2 v2.7.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
