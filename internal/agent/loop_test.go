@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -453,8 +454,9 @@ func TestMaxTokensStopContinues(t *testing.T) {
 
 func TestCancelDuringTool(t *testing.T) {
 	r1 := reply("running", "tool_use", u1,
+		use("w", "write", `{"path":"a.txt","content":"x"}`),
 		use("s", "shell", `{"command":"sleep 100"}`),
-		use("w", "write", `{"path":"a.txt","content":"x"}`))
+		use("w2", "write", `{"path":"b.txt","content":"y"}`))
 	c := replies(r1)
 	shell := blockShell{started: make(chan struct{})}
 	h := newHarness(t, c, shell)
@@ -469,11 +471,52 @@ func TestCancelDuringTool(t *testing.T) {
 	if res.Status != events.StatusCancelled || res.FinalText != "running" || res.Steps != 1 || res.Error != nil {
 		t.Fatalf("result %+v", res)
 	}
-	if _, err := os.Stat(filepath.Join(h.ws, "a.txt")); !os.IsNotExist(err) {
-		t.Fatalf("second tool ran: %v", err)
+	if _, err := os.Stat(filepath.Join(h.ws, "a.txt")); err != nil {
+		t.Fatalf("first tool did not run: %v", err)
 	}
-	sameMsgs(t, h.loop.History, []json.RawMessage{firstMsg, r1.Message})
+	if _, err := os.Stat(filepath.Join(h.ws, "b.txt")); !os.IsNotExist(err) {
+		t.Fatalf("tool after the stop ran: %v", err)
+	}
+	if got := roles(t, h.loop.History); !reflect.DeepEqual(got, []string{"user", "assistant", "user"}) {
+		t.Fatalf("roles %v", got)
+	}
 	sameMsgs(t, h.store.msgs, h.loop.History)
+	results := decodeUser(t, h.loop.History[2]).Content
+	if len(results) != 3 {
+		t.Fatalf("results %+v", results)
+	}
+	if results[0].ToolUseID != "w" || results[0].IsError || results[0].Content == "not run: cancelled" {
+		t.Errorf("completed tool result %+v", results[0])
+	}
+	for i, id := range []string{"s", "w2"} {
+		r := results[i+1]
+		if r.ToolUseID != id || !r.IsError || r.Content != "not run: cancelled" {
+			t.Errorf("result %d %+v", i+1, r)
+		}
+	}
+
+	evs := h.events(t)
+	type ev struct {
+		typ, id, text string
+		isErr         bool
+	}
+	var got []ev
+	for _, e := range evs {
+		if e.Item.Type == "tool_call" {
+			text := ""
+			if e.Item.ID == "s" {
+				text = e.Item.Text
+			}
+			got = append(got, ev{e.Type, e.Item.ID, text, e.Item.IsError})
+		}
+	}
+	want := []ev{
+		{"item.started", "w", "", false}, {"item.completed", "w", "", false},
+		{"item.started", "s", "", false}, {"item.completed", "s", "interrupted", true},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("tool events %+v", got)
+	}
 }
 
 func TestTimeoutIsLimit(t *testing.T) {
@@ -502,8 +545,83 @@ func TestTimeoutIsLimit(t *testing.T) {
 		if res.Status != events.StatusLimitReached || res.Error != nil || res.Steps != 1 {
 			t.Fatalf("result %+v", res)
 		}
-		sameMsgs(t, h.store.msgs, []json.RawMessage{firstMsg, r1.Message})
+		if len(h.store.msgs) != 3 {
+			t.Fatalf("store has %d messages", len(h.store.msgs))
+		}
+		if r := decodeUser(t, h.store.msgs[2]).Content; len(r) != 1 || r[0].Content != "not run: cancelled" || !r[0].IsError {
+			t.Fatalf("results %+v", r)
+		}
 	})
+	t.Run("already_expired", func(t *testing.T) {
+		c := replies(reply("never", "end_turn", u1))
+		h := newHarness(t, c, nil)
+		limitCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+		res := h.loop.Run(context.Background(), limitCtx, firstMsg)
+		if res.Status != events.StatusLimitReached || len(c.reqs) != 0 {
+			t.Fatalf("result %+v, %d requests", res, len(c.reqs))
+		}
+	})
+}
+
+func TestMaxTokensWithToolUsesNotRun(t *testing.T) {
+	r1 := reply("writing", "max_tokens", u1, use("w", "write", `{"path":"a.txt","content":"trunc"}`))
+	c := replies(r1, reply("done", "end_turn", u1))
+	h := newHarness(t, c, nil)
+	res := h.loop.Run(context.Background(), context.Background(), firstMsg)
+
+	if res.Status != events.StatusCompleted || res.FinalText != "done" || res.Steps != 2 {
+		t.Fatalf("result %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(h.ws, "a.txt")); !os.IsNotExist(err) {
+		t.Fatalf("cut-off tool ran: %v", err)
+	}
+	r := decodeUser(t, h.loop.History[2]).Content
+	want := "Your response hit the output limit and this tool call was cut off, so it was not run. Retry using smaller steps."
+	if len(r) != 1 || r[0].ToolUseID != "w" || !r[0].IsError || r[0].Content != want {
+		t.Fatalf("results %+v", r)
+	}
+	sameMsgs(t, h.store.msgs, h.loop.History)
+}
+
+func TestBadResponseIsInternal(t *testing.T) {
+	err := fmt.Errorf("%w: decode content: boom", provider.ErrBadResponse)
+	c := &fakeClient{steps: []func(context.Context) (provider.Response, error){
+		func(context.Context) (provider.Response, error) { return provider.Response{}, err },
+	}}
+	h := newHarness(t, c, nil)
+	res := h.loop.Run(context.Background(), context.Background(), firstMsg)
+	if res.Status != events.StatusInternalError || res.Error == nil || res.Error.Kind != "internal" || res.Error.Message != err.Error() {
+		t.Fatalf("result %+v error %+v", res, res.Error)
+	}
+}
+
+func TestStopReasons(t *testing.T) {
+	cases := []struct {
+		stop   string
+		status events.Status
+		msg    string
+	}{
+		{"end_turn", events.StatusCompleted, ""},
+		{"stop_sequence", events.StatusCompleted, ""},
+		{"model_context_window_exceeded", events.StatusLimitReached, ""},
+		{"pause_turn", events.StatusInternalError, "unexpected stop reason: pause_turn"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.stop, func(t *testing.T) {
+			h := newHarness(t, replies(reply("text", tc.stop, u1)), nil)
+			res := h.loop.Run(context.Background(), context.Background(), firstMsg)
+			if res.Status != tc.status || res.FinalText != "text" || res.Steps != 1 {
+				t.Fatalf("result %+v", res)
+			}
+			if tc.msg == "" && res.Error != nil {
+				t.Fatalf("error %+v", res.Error)
+			}
+			if tc.msg != "" && (res.Error == nil || res.Error.Kind != "internal" || res.Error.Message != tc.msg) {
+				t.Fatalf("error %+v", res.Error)
+			}
+		})
+	}
 }
 
 func TestCancelBeatsLimit(t *testing.T) {
@@ -531,6 +649,9 @@ func TestStoreErrorIsInternal(t *testing.T) {
 	}
 	if len(c.reqs) != 0 {
 		t.Fatalf("stepped with unsaved history: %d requests", len(c.reqs))
+	}
+	if len(h.loop.History) != 0 {
+		t.Fatalf("history holds an unsaved message: %s", h.loop.History)
 	}
 }
 

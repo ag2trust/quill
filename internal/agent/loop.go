@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"slices"
 
 	"quill/internal/events"
@@ -13,7 +15,11 @@ import (
 	"quill/internal/tools"
 )
 
-const continueText = "Your previous response hit the output limit. Continue, using smaller steps."
+const (
+	continueText = "Your previous response hit the output limit. Continue, using smaller steps."
+	cutOffText   = "Your response hit the output limit and this tool call was cut off, so it was not run. Retry using smaller steps."
+	notRunText   = "not run: cancelled"
+)
 
 // Options are the fixed settings of a run.
 type Options struct {
@@ -59,6 +65,8 @@ func (l *Loop) Run(ctx, limitCtx context.Context, next ...json.RawMessage) event
 	defer cancel()
 	stop := context.AfterFunc(limitCtx, cancel)
 	defer stop()
+	// Our appends must never write into a caller's backing array.
+	l.History = slices.Clip(l.History)
 
 	var res events.RunCompleted
 	finish := func(s events.Status) events.RunCompleted {
@@ -87,6 +95,9 @@ func (l *Loop) Run(ctx, limitCtx context.Context, next ...json.RawMessage) event
 	}
 
 	for {
+		if s, ok := interrupted(); ok {
+			return finish(s)
+		}
 		if res.Steps >= l.Opts.MaxSteps {
 			return finish(events.StatusLimitReached)
 		}
@@ -98,7 +109,7 @@ func (l *Loop) Run(ctx, limitCtx context.Context, next ...json.RawMessage) event
 			if s, ok := interrupted(); ok {
 				return finish(s)
 			}
-			if isBadResponse(err) {
+			if errors.Is(err, provider.ErrBadResponse) {
 				return internal(err)
 			}
 			perr := provider.Classify(err)
@@ -116,7 +127,7 @@ func (l *Loop) Run(ctx, limitCtx context.Context, next ...json.RawMessage) event
 		}
 		if resp.Text != "" {
 			res.FinalText = resp.Text
-			l.Events.ItemCompleted(events.Item{Type: "message", Text: resp.Text})
+			l.emitCompleted(events.Item{Type: "message", Text: resp.Text})
 		}
 
 		if resp.StopReason == "refusal" {
@@ -125,15 +136,31 @@ func (l *Loop) Run(ctx, limitCtx context.Context, next ...json.RawMessage) event
 		}
 
 		var reply json.RawMessage
-		if len(resp.ToolUses) == 0 {
-			if resp.StopReason != "max_tokens" {
+		var stopped events.Status // set when the run is stopped mid-tools
+		switch {
+		case len(resp.ToolUses) == 0:
+			switch resp.StopReason {
+			case "end_turn", "stop_sequence":
 				return finish(events.StatusCompleted)
+			case "model_context_window_exceeded":
+				return finish(events.StatusLimitReached)
+			case "max_tokens":
+				reply, err = marshal(userMessage[textBlock]{"user", []textBlock{{"text", continueText}}})
+			default:
+				return internal(fmt.Errorf("unexpected stop reason: %s", resp.StopReason))
 			}
-			reply, err = marshal(userMessage[textBlock]{"user", []textBlock{{"text", continueText}}})
-			if err != nil {
-				return internal(err)
+
+		case resp.StopReason == "max_tokens":
+			// The last tool call's input may be cut off: run none of them.
+			results := make([]toolResult, 0, len(resp.ToolUses))
+			for _, tu := range resp.ToolUses {
+				l.emitStarted(tu)
+				l.emitCompleted(toolItem(tu, cutOffText, true))
+				results = append(results, toolResult{"tool_result", tu.ID, cutOffText, true})
 			}
-		} else {
+			reply, err = marshal(userMessage[toolResult]{"user", results})
+
+		default:
 			for _, tu := range resp.ToolUses {
 				if tu.Name != tools.BlockerTool {
 					continue
@@ -143,34 +170,51 @@ func (l *Loop) Run(ctx, limitCtx context.Context, next ...json.RawMessage) event
 					return finish(events.StatusBlocked)
 				}
 			}
-
-			results := make([]toolResult, 0, len(resp.ToolUses))
-			for _, tu := range resp.ToolUses {
-				if s, ok := interrupted(); ok {
-					return finish(s)
-				}
-				l.Events.ItemStarted(events.Item{Type: "tool_call", ID: tu.ID, Name: tu.Name, Input: tu.Input})
-				r := l.runTool(runCtx, tu)
-				if s, ok := interrupted(); ok {
-					// The result may be cut short by the stop; it is not saved.
-					return finish(s)
-				}
-				l.Events.ItemCompleted(events.Item{Type: "tool_call", ID: tu.ID, Name: tu.Name, Input: tu.Input, Text: r.Content, IsError: r.IsError})
-				results = append(results, toolResult{"tool_result", tu.ID, r.Content, r.IsError})
-			}
+			var results []toolResult
+			results, stopped = l.runTools(runCtx, resp.ToolUses, interrupted)
 			reply, err = marshal(userMessage[toolResult]{"user", results})
-			if err != nil {
-				return internal(err)
-			}
+		}
+		if err != nil {
+			return internal(err)
 		}
 		if err := l.add(reply); err != nil {
 			return internal(err)
+		}
+		if stopped != "" {
+			// Saved above: tools that ran had real effects.
+			return finish(stopped)
 		}
 
 		if res.Usage.Billable() >= l.Opts.MaxTokens {
 			return finish(events.StatusLimitReached)
 		}
 	}
+}
+
+// runTools runs the calls sequentially, in order. If the run is stopped, the
+// call in progress and the rest get notRunText and stopped is the status.
+func (l *Loop) runTools(ctx context.Context, uses []provider.ToolUse, interrupted func() (events.Status, bool)) (results []toolResult, stopped events.Status) {
+	results = make([]toolResult, 0, len(uses))
+	for _, tu := range uses {
+		if stopped == "" {
+			stopped, _ = interrupted()
+		}
+		if stopped != "" {
+			results = append(results, toolResult{"tool_result", tu.ID, notRunText, true})
+			continue
+		}
+		l.emitStarted(tu)
+		r := l.runTool(ctx, tu)
+		if stopped, _ = interrupted(); stopped != "" {
+			// The stop may have cut the result short; it is not reported as real.
+			l.emitCompleted(toolItem(tu, "interrupted", true))
+			results = append(results, toolResult{"tool_result", tu.ID, notRunText, true})
+			continue
+		}
+		l.emitCompleted(toolItem(tu, r.Content, r.IsError))
+		results = append(results, toolResult{"tool_result", tu.ID, r.Content, r.IsError})
+	}
+	return results, stopped
 }
 
 // runTool runs one tool call; raise_blocker reaches here only with invalid input.
@@ -182,16 +226,25 @@ func (l *Loop) runTool(ctx context.Context, tu provider.ToolUse) tools.Result {
 	return l.Registry.Run(ctx, tu.Name, tu.Input)
 }
 
-// isBadResponse reports a malformed API response, which is a Quill-side
-// problem rather than a provider failure.
-// TODO(controller): becomes errors.Is(err, provider.ErrBadResponse) once
-// the provider exports that sentinel.
-func isBadResponse(err error) bool { return false }
+func toolItem(tu provider.ToolUse, text string, isError bool) events.Item {
+	return events.Item{Type: "tool_call", ID: tu.ID, Name: tu.Name, Input: tu.Input, Text: text, IsError: isError}
+}
 
-// add appends m to the history and the store.
+// Event write errors are deliberately ignored: the caller owns stdout and
+// reports the run in run.completed.
+func (l *Loop) emitStarted(tu provider.ToolUse) {
+	_ = l.Events.ItemStarted(events.Item{Type: "tool_call", ID: tu.ID, Name: tu.Name, Input: tu.Input})
+}
+
+func (l *Loop) emitCompleted(it events.Item) { _ = l.Events.ItemCompleted(it) }
+
+// add appends m to the store and, once it is saved, to the history.
 func (l *Loop) add(m json.RawMessage) error {
+	if err := l.Store.Append(m); err != nil {
+		return err
+	}
 	l.History = append(l.History, m)
-	return l.Store.Append(m)
+	return nil
 }
 
 // marshal encodes v compactly without HTML escaping.
