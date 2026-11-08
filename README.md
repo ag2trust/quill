@@ -1,9 +1,9 @@
 # Quill
 
-Status: design stage, nothing built. Started 2026-10-31 as a handoff for the next agent. The
-first version is a rough proof of concept.
+Status: proof of concept, built 2026-11-08. Started 2026-10-31 as a handoff for the next
+agent. Not ready for production; see the safety baseline.
 
-This repository is private. Never commit API keys, tokens, customer data, or run transcripts.
+This repository is public. Never commit API keys, tokens, customer data, or run transcripts.
 
 Open questions are in [`DISCUSSION.md`](DISCUSSION.md). Anything not listed under "Decided"
 below is a proposal, not a decision. When a question is decided, move it here with the date.
@@ -31,12 +31,12 @@ handling one prompt is a **run**.
 
 - Name: Quill. The binary is `quill`.
 - Language: Go, for official SDKs, few dependencies, one static binary, and fast builds.
-- Private, separate repo.
+- Separate repo. Public since 2026-11-08 (`github.com/ag2trust/quill`).
 - No UI. Quill is headless only, with no terminal UI, chat, or permission prompts.
 - Quill is unaware of its callers. It has no knowledge of any orchestrator or hosted product,
   and no caller-specific code, names, or concepts. Callers adapt to Quill's generic interface.
 - Very basic scope, with high standards on safety. No convenience features.
-- Being private is not a security control. The main threat is prompt injection from hostile
+- Repo visibility is not a security control. The main threat is prompt injection from hostile
   repositories, and the binary runs beside untrusted code. Rely on containment.
 
 ### Provider (2026-11-05)
@@ -52,7 +52,7 @@ handling one prompt is a **run**.
   the run with the SDK's retries, honouring `retry-after`, within `--timeout`. Longer waits and
   failover belong to the caller.
 
-### Command line (2026-11-07)
+### Command line (2026-11-07, limit defaults 2026-11-08)
 
 Modelled on `codex exec`, OpenAI's headless CLI.
 
@@ -67,7 +67,7 @@ echo "$TASK" | quill exec [flags] -
 | `--model ID` | Claude model. | `claude-opus-5-5` |
 | `--effort LEVEL` | Model effort. | `high` |
 | `--sandbox read-only\|workspace-write` | Tool profile. `read-only` has no write, edit, or shell tools. | `workspace-write` |
-| `--max-steps N`, `--max-tokens N`, `--timeout D` | Hard limits for the run. | to be set |
+| `--max-steps N`, `--max-tokens N`, `--timeout D` | Hard limits for the run. `--max-tokens` counts input, output, and cache-write tokens, not cache reads. | `100`, `2000000`, `30m` |
 | `--session FILE` | Session file to create or continue. See Sessions. | none |
 | `--env NAME` | Pass this environment variable to tools. Repeatable. | none |
 
@@ -75,11 +75,27 @@ echo "$TASK" | quill exec [flags] -
 - Flags carry options only. The prompt never goes in argv, where it would be visible in `ps`
   and limited in size.
 
-### Tools (2026-11-07)
+### Tools (2026-11-07, details 2026-11-08)
 
 - `read`, `write`, `edit` (exact text), `list`, `search`, `shell`, and `raise_blocker`.
 - Each shell command has a fixed 10-minute timeout. A timed-out command is killed and
   reported to the model as a tool error; the run continues.
+- Tool input is checked strictly; unknown fields are an error. The schemas are fixed in
+  `internal/tools/registry.go`.
+- `read` returns the whole file, or `limit` lines from `offset` (1-based). `write` creates
+  parent directories and overwrites. `list` is non-recursive and sorted, directories end
+  with `/`. `read`, `write`, and `edit` refuse non-regular files, and `read` and `edit`
+  refuse files over 10 MB.
+- `edit` replaces `old_text`, which must match exactly one place unless `replace_all` is
+  set. Otherwise it is a tool error saying the text was not found or how many places
+  matched.
+- `search` takes a Go regular expression and an optional path. It skips `.git`, symlinks,
+  binary files, and files over 1 MB, cuts lines at 500 bytes, and stops after 200 matches.
+- Tool output over 30,000 bytes keeps the first and last 15,000 bytes around a marker
+  giving the number of bytes left out. The same output is always cut the same way, so the
+  cache stays valid.
+- The model may request several tools in one response. Quill runs them one at a time, in
+  order.
 
 ### Sessions (2026-11-07)
 
@@ -89,7 +105,9 @@ continue, the caller starts a new run with the same session file.
 - `--session FILE`: if the file exists, Quill continues from it and appends the new turn. If
   it does not exist, Quill creates it. Without `--session`, the run is one-off and nothing is
   written.
-- Quill refuses a session path inside the workspace, so the agent cannot edit its own history.
+- Quill refuses a session path inside the workspace, so the file tools cannot edit it. The
+  shell runs as the same user, so containment is the container's job (see the safety
+  baseline).
 - Format: JSON lines. The first line holds settings fixed for the session. Each later line is
   one message in Claude API format, exactly as sent or received.
 
@@ -98,11 +116,14 @@ continue, the caller starts a new run with the same session file.
   {"type":"message","message":{"role":"user","content":[{"type":"text","text":"Fix the failing test"}]}}
   ```
 
-- Continuing with a different `--model` or `--sandbox` is bad usage (exit 2).
+- Continuing with a different `--model`, `--effort`, or `--sandbox` set explicitly is bad
+  usage (exit 2); unset flags take the session's values.
 - Quill appends after each completed step, so a crash leaves a valid file. It locks the file
   so two runs cannot share it, and creates it with mode `0600`. The file holds prompts and
   file contents; callers treat it as sensitive.
 - The file does not contain the API key, usage, or events.
+- An assistant reply with no content, and a refused turn, are not saved: the API would reject
+  them in the next request.
 
 ### Blockers (2026-11-07)
 
@@ -122,7 +143,7 @@ damage, the agent stops instead of guessing.
 
 - Quill reads `AGENTS.md` and `CLAUDE.md` from the workspace root, if present, capped at
   32 KB each. They go into the first user message, marked as repository content, never into
-  the system prompt.
+  the system prompt. When `CLAUDE.md` is the same file as `AGENTS.md`, it is included once.
 - The built-in system prompt holds Quill's safety rules and sets this precedence:
   1. Quill's safety rules always win.
   2. The task decides what to do.
@@ -134,16 +155,21 @@ damage, the agent stops instead of guessing.
 - Tools start from a clean environment: `PATH`, `HOME`, `USER`, `LANG`, `TMPDIR`, plus each
   variable named with `--env`. Quill copies the value from its own environment.
 - `--env ANTHROPIC_API_KEY` is refused.
-- `run.started` lists the names passed, so a missing variable is easy to spot.
+- `run.started` lists the names passed, so a missing variable is easy to spot. Unset or
+  empty variables are not passed and are missing from `env_passed`.
 - This stops accidental leaks only. A same-user tool can still read the key from Quill's
   process. See the safety baseline.
 
 ### Cleanup and stopping (2026-11-07)
 
 - Each shell command runs in its own process group, tracked by Quill.
-- On SIGTERM, SIGINT, or run timeout, Quill stops every command group (SIGTERM, then SIGKILL
-  after a few seconds), writes `run.completed` with status `cancelled` or `limit_reached`, and
-  exits.
+- On SIGTERM, SIGINT, SIGHUP, or run timeout, Quill stops every command group (SIGTERM, then
+  SIGKILL after a few seconds), writes `run.completed` with status `cancelled` or
+  `limit_reached`, and exits.
+- A run stopped during tool calls saves its tool results: tools that finished get their real
+  results, the call in progress gets "interrupted: it may have partly run", and the rest get
+  "not run: cancelled". If Quill crashed instead, continuing the session gives every call
+  left without a result "interrupted: it may have partly run".
 - Quill removes everything it created: processes, temporary files, and temporary directories.
   The agent's changes to the workspace are the result of the task and stay.
 - Callers stop Quill with SIGTERM, and SIGKILL only if it has not exited after about 10
@@ -155,7 +181,10 @@ damage, the agent stops instead of guessing.
 - Events: `run.started`, `item.started`, `item.completed` (assistant messages and tool calls
   with name and input), and `run.completed`.
 - Exactly one `run.completed`, always the last line, except after SIGKILL. No `run.completed`
-  means Quill crashed.
+  means Quill crashed, except exit 2, which reports on stderr only. A Go runtime crash also
+  exits 2, but normally after `run.started`, so stdout is non-empty and has no
+  `run.completed`. A SIGTERM, SIGINT, or SIGHUP before the prompt is read ends Quill with
+  no output.
 
 ```json
 {"type":"run.completed","status":"completed","final_text":"Fixed the flaky test by ...",
@@ -175,7 +204,7 @@ damage, the agent stops instead of guessing.
 | 3 | `limit_reached` | Steps, tokens, or time ran out |
 | 4 | `provider_error` | See `error.kind` |
 | 5 | `blocked` | Waiting for input. See `blocker` |
-| 143 | `cancelled` | Stopped by SIGTERM |
+| 143 | `cancelled` | Stopped by SIGTERM, SIGINT or SIGHUP |
 
 - Provider errors are classified from HTTP status and API error type only, never from text.
   Each `error` also carries `http_status`, the API's `type`, `message`, and `request_id`.
@@ -206,6 +235,8 @@ damage, the agent stops instead of guessing.
 - Reject paths that resolve outside the workspace, including through symlinks.
 - The container is the sandbox: non-root, read-only image, CPU, memory, and process limits,
   and restricted network.
+- Run Quill under an init in containers (`docker run --init` or tini) so orphaned processes
+  are reaped.
 - API keys must not reach tools. The proof of concept only keeps the key out of the tool
   environment. That is not enough, because a same-user process can inspect Quill. Before
   production, run tools as a separate user, or send model calls through a small proxy.

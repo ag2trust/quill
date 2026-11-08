@@ -1,0 +1,47 @@
+#!/bin/sh
+# pre-push — quick gate on every push: branch base + gofmt.
+#
+# Enable once per clone: git config core.hooksPath .githooks
+# The full gate is ./preflight.sh, required before opening a PR.
+# Do NOT bypass with --no-verify — fix the underlying issue instead.
+
+set -u
+
+fail() {
+  printf 'pre-push: %s\n' "$1" >&2
+  exit 1
+}
+
+REPO_ROOT=$(git rev-parse --show-toplevel) || exit 1
+cd "$REPO_ROOT" || exit 1
+
+# Git sends one line per ref update: <local-ref> <local-sha> <remote-ref> <remote-sha>
+LOCAL_REF= LOCAL_SHA= REMOTE_REF= REMOTE_SHA= EXTRA=
+if ! read -r LOCAL_REF LOCAL_SHA REMOTE_REF REMOTE_SHA EXTRA; then
+  # Up-to-date refs are omitted, so a no-op push has empty stdin.
+  [ -z "$LOCAL_REF$LOCAL_SHA$REMOTE_REF$REMOTE_SHA$EXTRA" ] && exec ./preflight.sh --quick
+fi
+[ -z "$EXTRA" ] || fail "malformed ref update"
+if read -r _; then
+  fail "push one ref at a time"
+fi
+
+case "$LOCAL_SHA" in
+  *[!0]*) ;;
+  *) fail "deleting remote refs is not permitted" ;;
+esac
+
+case "$REMOTE_REF" in
+  refs/tags/*) exec ./preflight.sh --quick --format-only --tip="$LOCAL_SHA" ;;
+  refs/heads/*) ;;
+  *) fail "remote ref must be refs/heads/* or refs/tags/*" ;;
+esac
+
+case "$REMOTE_SHA" in
+  *[!0]*)
+    git merge-base --is-ancestor "$REMOTE_SHA" "$LOCAL_SHA" 2>/dev/null \
+      || fail "remote branch update is stale or non-fast-forward"
+    ;;
+esac
+
+exec ./preflight.sh --quick --tip="$LOCAL_SHA" --target="${REMOTE_REF#refs/heads/}"

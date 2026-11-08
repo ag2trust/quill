@@ -3,3 +3,5 @@
 *.test
 *.out
 .env
+*.jsonl
+.env*
