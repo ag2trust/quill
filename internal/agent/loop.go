@@ -123,8 +123,12 @@ func (l *Loop) Run(ctx, limitCtx context.Context, next ...json.RawMessage) event
 
 		res.Steps++
 		res.Usage.Add(resp.Usage)
-		if err := l.add(resp.Message); err != nil {
-			return internal(err)
+		// The API rejects an empty assistant message that is not final, and
+		// a refused turn must be dropped before continuing: save neither.
+		if resp.StopReason != "refusal" && !emptyContent(resp.Message) {
+			if err := l.add(resp.Message); err != nil {
+				return internal(err)
+			}
 		}
 		if resp.Text != "" {
 			res.FinalText = resp.Text
@@ -248,6 +252,14 @@ func (l *Loop) add(m json.RawMessage) error {
 	}
 	l.History = append(l.History, m)
 	return nil
+}
+
+// emptyContent reports whether assistant message m has no content blocks.
+func emptyContent(m json.RawMessage) bool {
+	var v struct {
+		Content []json.RawMessage `json:"content"`
+	}
+	return json.Unmarshal(m, &v) == nil && len(v.Content) == 0
 }
 
 // marshal encodes v compactly without HTML escaping.

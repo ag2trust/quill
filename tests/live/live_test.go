@@ -198,8 +198,8 @@ func TestLiveResume(t *testing.T) {
 
 // TestLiveResumeAfterInterrupted interrupts a real run mid-shell-call, then
 // resumes it. The resumed request carries two consecutive user messages (the
-// "not run: cancelled" tool_result, then the prompt); this checks the API
-// accepts that.
+// "interrupted: it may have partly run" tool_result, then the prompt); this
+// checks the API accepts that.
 func TestLiveResumeAfterInterrupted(t *testing.T) {
 	bin := live(t)
 	ws, sess := t.TempDir(), sessionPath(t)

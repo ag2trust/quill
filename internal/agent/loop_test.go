@@ -396,9 +396,21 @@ func TestRefusal(t *testing.T) {
 	if res.Error == nil || *res.Error != provider.Refused().Info {
 		t.Fatalf("error %+v", res.Error)
 	}
-	if len(h.store.msgs) != 2 {
-		t.Fatalf("store has %d messages", len(h.store.msgs))
+	// The refused turn is dropped so the session can continue.
+	sameMsgs(t, h.loop.History, []json.RawMessage{firstMsg})
+	sameMsgs(t, h.store.msgs, h.loop.History)
+}
+
+// An assistant message with empty content would be rejected by the API as a
+// non-final message, so it is not saved; the run still completes.
+func TestEmptyEndTurnNotSaved(t *testing.T) {
+	h := newHarness(t, replies(reply("", "end_turn", u1)), nil)
+	res := h.loop.Run(context.Background(), context.Background(), firstMsg)
+	if res.Status != events.StatusCompleted || res.FinalText != "" || res.Steps != 1 || res.Error != nil {
+		t.Fatalf("result %+v", res)
 	}
+	sameMsgs(t, h.loop.History, []json.RawMessage{firstMsg})
+	sameMsgs(t, h.store.msgs, h.loop.History)
 }
 
 func TestProviderErrorKind(t *testing.T) {

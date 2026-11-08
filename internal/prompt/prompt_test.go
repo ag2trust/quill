@@ -85,6 +85,24 @@ func TestFirstMessageWithGuidance(t *testing.T) {
 	}
 }
 
+func TestGuidanceSameFileOnce(t *testing.T) {
+	w := ws(t)
+	if err := os.WriteFile(filepath.Join(w, "AGENTS.md"), []byte("shared rules"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("AGENTS.md", filepath.Join(w, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := FirstMessage(w, "task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := parse(t, raw).Content[0].Text
+	if strings.Count(g, "shared rules") != 1 || !strings.Contains(g, `<repository_guidance file="AGENTS.md">`) || strings.Contains(g, "CLAUDE.md") {
+		t.Fatalf("guidance: %q", g)
+	}
+}
+
 func TestGuidanceCapped(t *testing.T) {
 	w := ws(t)
 	if err := os.WriteFile(filepath.Join(w, "AGENTS.md"), []byte(strings.Repeat("x", 40000)), 0o644); err != nil {
@@ -160,14 +178,21 @@ func TestResumeAfterBlocker(t *testing.T) {
 	}
 }
 
+// Without a blocker, pending calls are left over from a crash and may have
+// partly run.
 func TestResumeAfterInterruptedTools(t *testing.T) {
-	last := json.RawMessage(`{"role":"assistant","content":[{"type":"tool_use","id":"s1","name":"shell","input":{}}]}`)
+	last := json.RawMessage(`{"role":"assistant","content":[{"type":"tool_use","id":"s1","name":"shell","input":{}},{"type":"tool_use","id":"w1","name":"write","input":{}}]}`)
 	raw, err := ResumeMessage(last, "continue")
 	if err != nil {
 		t.Fatal(err)
 	}
 	m := parse(t, raw)
-	if len(m.Content) != 2 || m.Content[0] != (blk{Type: "tool_result", ToolUseID: "s1", Content: "not run: paused"}) || m.Content[1] != (blk{Type: "text", Text: "continue"}) {
+	want := []blk{
+		{Type: "tool_result", ToolUseID: "s1", Content: "interrupted: it may have partly run"},
+		{Type: "tool_result", ToolUseID: "w1", Content: "interrupted: it may have partly run"},
+		{Type: "text", Text: "continue"},
+	}
+	if len(m.Content) != 3 || m.Content[0] != want[0] || m.Content[1] != want[1] || m.Content[2] != want[2] {
 		t.Fatalf("got %s", raw)
 	}
 }
