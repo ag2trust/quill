@@ -53,6 +53,12 @@ func TestStepSendsCacheAndRawHistory(t *testing.T) {
 	}
 	body := reqs[0]
 
+	counts := topLevelKeys(t, body)
+	for _, k := range []string{"messages", "system", "tools", "output_config", "cache_control", "max_tokens", "model"} {
+		if counts[k] != 1 {
+			t.Errorf("key %q appears %d times at top level", k, counts[k])
+		}
+	}
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(body, &top); err != nil {
 		t.Fatalf("invalid body %s: %v", body, err)
@@ -174,7 +180,35 @@ func TestRetriesTransient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("got %v", err)
 	}
-	if resp.Text != "ok" || len(srv.Requests()) != 3 {
-		t.Errorf("text %q, %d requests", resp.Text, len(srv.Requests()))
+	reqs := srv.Requests()
+	if resp.Text != "ok" || len(reqs) != 3 {
+		t.Fatalf("text %q, %d requests", resp.Text, len(reqs))
 	}
+	for i := 1; i < len(reqs); i++ {
+		if !bytes.Equal(reqs[i], reqs[0]) {
+			t.Errorf("retry %d body differs:\n%s\n%s", i, reqs[i], reqs[0])
+		}
+	}
+}
+
+// topLevelKeys counts each key of the top-level JSON object, duplicates included.
+func topLevelKeys(t *testing.T, body []byte) map[string]int {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(body))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		t.Fatalf("body is not an object: %v %v", tok, err)
+	}
+	counts := map[string]int{}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			t.Fatal(err)
+		}
+		counts[tok.(string)]++
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return counts
 }

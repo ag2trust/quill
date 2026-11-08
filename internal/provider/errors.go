@@ -30,15 +30,23 @@ func (e *Error) Error() string {
 }
 
 // Classify maps a Step error to an *Error, from HTTP status and API error type
-// only. It returns nil for nil and for context cancellation or deadline errors:
-// those come from the caller's context, and the caller decides what they mean.
+// only. It returns nil for nil, for context cancellation or deadline errors
+// (those come from the caller's context, and the caller decides what they
+// mean), and for ErrBadResponse (the caller reports internal_error).
+// Retries is the number of retries Step actually made.
 func Classify(err error) *Error {
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, ErrBadResponse) {
 		return nil
+	}
+	retries := 0
+	var se *stepError
+	if errors.As(err, &se) {
+		retries = se.retries
 	}
 	var apiErr *anthropic.Error
 	if !errors.As(err, &apiErr) {
-		return &Error{Info: events.ErrorInfo{Kind: "network", Message: err.Error(), Retries: maxRetries}}
+		return &Error{Info: events.ErrorInfo{Kind: "network", Message: err.Error(), Retries: retries}}
 	}
 
 	info := events.ErrorInfo{
@@ -47,7 +55,7 @@ func Classify(err error) *Error {
 		Message:    apiErr.Message,
 		RequestID:  apiErr.RequestID,
 		HTTPStatus: apiErr.StatusCode,
-		Retries:    maxRetries,
+		Retries:    retries,
 	}
 	var body struct {
 		RequestID string `json:"request_id"`

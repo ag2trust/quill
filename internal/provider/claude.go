@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -77,10 +79,28 @@ func NewClaude(apiKey string, opts ...option.RequestOption) *Claude {
 	return &Claude{client: anthropic.NewClient(append(base, opts...)...)}
 }
 
-// Step sends one request and returns the parsed reply. Errors are returned as
-// the SDK produced them, except a per-attempt timeout, which is reported as a
-// plain error (not context.DeadlineExceeded) so Classify treats it as network.
-// Use Classify to turn an error into an *Error.
+// ErrBadResponse marks a failure that is neither an API error nor a network
+// error: a request body that could not be built, or a 2xx response that could
+// not be decoded. Classify returns nil for it; the caller reports internal_error.
+var ErrBadResponse = errors.New("provider: bad response")
+
+// maxRetryWait is the longest retry-after the SDK may sleep for inside a run.
+// Longer waits end the step with the API error so the caller can decide.
+const maxRetryWait = 60 * time.Second
+
+// stepError carries how many retries Step made before failing.
+type stepError struct {
+	err     error
+	retries int
+}
+
+func (e *stepError) Error() string { return e.err.Error() }
+func (e *stepError) Unwrap() error { return e.err }
+
+// Step sends one request and returns the parsed reply. Errors wrap what the SDK
+// produced (errors.As/Is still see it), except a per-attempt timeout, which is
+// reported as a plain error (not context.DeadlineExceeded) so Classify treats it
+// as network. Use Classify to turn an error into an *Error.
 func (c *Claude) Step(ctx context.Context, req Request) (Response, error) {
 	params := anthropic.MessageNewParams{
 		Model:        anthropic.Model(req.Model),
@@ -89,23 +109,52 @@ func (c *Claude) Step(ctx context.Context, req Request) (Response, error) {
 	}
 	body, err := requestBody(params, req)
 	if err != nil {
-		return Response{}, err
+		return Response{}, fmt.Errorf("%w: build request: %v", ErrBadResponse, err)
 	}
+	attempts := 0
 	var raw []byte
 	_, err = c.client.Messages.New(ctx, params,
 		option.WithRequestBody("application/json", body),
 		option.WithResponseBodyInto(&raw),
+		option.WithMiddleware(func(r *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+			attempts++
+			res, err := next(r)
+			if res != nil && retryWait(res.Header) > maxRetryWait {
+				res.Header.Set("x-should-retry", "false")
+			}
+			return res, err
+		}),
 	)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return Response{}, ctxErr
+			err = ctxErr
+		} else if errors.Is(err, context.DeadlineExceeded) {
+			err = fmt.Errorf("provider: request timed out: %v", err)
 		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return Response{}, fmt.Errorf("provider: request timed out: %v", err)
-		}
-		return Response{}, err
+		return Response{}, &stepError{err: err, retries: max(0, attempts-1)}
 	}
 	return parseResponse(raw)
+}
+
+// retryWait is the wait the response asks for, read the way the SDK does:
+// retry-after-ms first, then retry-after as seconds or an HTTP date.
+func retryWait(h http.Header) time.Duration {
+	if v := h.Get("retry-after-ms"); v != "" {
+		if ms, err := strconv.ParseFloat(v, 64); err == nil {
+			return time.Duration(ms * float64(time.Millisecond))
+		}
+	}
+	v := h.Get("retry-after")
+	if v == "" {
+		return 0
+	}
+	if s, err := strconv.ParseFloat(v, 64); err == nil {
+		return time.Duration(s * float64(time.Second))
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		return time.Until(t)
+	}
+	return 0
 }
 
 // requestBody serializes params and splices in the raw fields. The SDK's
@@ -167,7 +216,7 @@ func parseResponse(raw []byte) (Response, error) {
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(raw, &msg); err != nil {
-		return Response{}, fmt.Errorf("provider: decode response: %w", err)
+		return Response{}, fmt.Errorf("%w: decode response: %v", ErrBadResponse, err)
 	}
 	if len(msg.Content) == 0 || string(msg.Content) == "null" {
 		msg.Content = json.RawMessage(`[]`)
@@ -180,7 +229,7 @@ func parseResponse(raw []byte) (Response, error) {
 		Input json.RawMessage `json:"input"`
 	}
 	if err := json.Unmarshal(msg.Content, &blocks); err != nil {
-		return Response{}, fmt.Errorf("provider: decode content: %w", err)
+		return Response{}, fmt.Errorf("%w: decode content: %v", ErrBadResponse, err)
 	}
 
 	resp := Response{

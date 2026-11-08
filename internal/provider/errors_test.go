@@ -67,8 +67,12 @@ func TestClassify(t *testing.T) {
 			if info.Kind != tc.kind || info.Type != tc.typ || info.HTTPStatus != tc.status {
 				t.Errorf("info %+v", info)
 			}
-			if info.Message != "msg "+tc.typ || info.RequestID != "req_body" || info.Retries != 2 {
-				t.Errorf("info %+v", info)
+			wantRetries := 0
+			if tc.retryable {
+				wantRetries = 2
+			}
+			if info.Message != "msg "+tc.typ || info.RequestID != "req_body" || info.Retries != wantRetries {
+				t.Errorf("info %+v (want retries %d)", info, wantRetries)
 			}
 			if tc.status == 429 && info.RetryAfter != "7" {
 				t.Errorf("retry_after %q", info.RetryAfter)
@@ -165,5 +169,42 @@ func TestExhaustedScriptIs500(t *testing.T) {
 	e := Classify(err)
 	if e == nil || e.Info.HTTPStatus != 500 || e.Info.Type != "api_error" {
 		t.Fatalf("got %+v", e)
+	}
+}
+
+func TestLongRetryAfterIsNotWaited(t *testing.T) {
+	r := fakeapi.Reply{
+		Status: 429,
+		Header: http.Header{"Retry-After": {"900"}},
+		Body:   `{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`,
+	}
+	srv := fakeapi.New(t, r, r, r)
+	c := newClient(t, srv.URL())
+	start := time.Now()
+	_, err := c.Step(context.Background(), simpleRequest())
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("Step slept %v", d)
+	}
+	e := Classify(err)
+	if e == nil || e.Info.Kind != "rate_limited" || e.Info.RetryAfter != "900" || e.Info.Retries != 0 {
+		t.Fatalf("got %+v (err %v)", e, err)
+	}
+	if n := len(srv.Requests()); n != 1 {
+		t.Errorf("%d requests, want 1", n)
+	}
+}
+
+func TestBadResponseNotClassified(t *testing.T) {
+	bodies := []string{
+		`not json`,
+		`{"id":"msg_1","type":"message","role":"assistant","content":{"type":"text"},"stop_reason":"end_turn"}`,
+	}
+	for _, b := range bodies {
+		srv := fakeapi.New(t, fakeapi.Reply{Body: b})
+		c := newClient(t, srv.URL())
+		_, err := c.Step(context.Background(), simpleRequest())
+		if !errors.Is(err, ErrBadResponse) || Classify(err) != nil {
+			t.Errorf("body %s: err %v classified %+v", b, err, Classify(err))
+		}
 	}
 }
