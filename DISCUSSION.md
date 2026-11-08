@@ -46,10 +46,13 @@ Lookups, not discussions.
    If 400, map it to `billing`.
 3. Check the prior-art table against official docs, especially Claude Code resume.
 4. Check `quill` for name collisions; the repo went public on 2026-11-08.
-5. Does the API accept consecutive user messages? Resuming after SIGTERM sends the saved
-   tool results, then the prompt, as two user messages. `TestLiveResumeAfterInterrupted`
-   checks this.
+5. Verified 2026-11-08 (live, Haiku 5.5): the API accepts consecutive user messages.
+   `TestLiveResumeAfterInterrupted` cancelled a run mid-`shell`, resumed it, and completed.
 6. Does a high-effort step with `max_tokens` 32,000 finish within the 10-minute per-attempt
-   timeout without streaming? If not, consider streaming.
+   timeout without streaming? If not, consider streaming. Still open: the live suite runs at
+   low effort.
 7. After an empty `end_turn` or a `refusal`, does resuming the session work? Quill saves
-   neither turn, so the next request may hold two consecutive user messages.
+   neither turn, so the next request may hold two consecutive user messages. Item 5 shows
+   the API accepts that shape; neither stop has been triggered live.
+8. Verified 2026-11-08 (live): automatic prompt caching produces cache reads (about 9,800
+   tokens read on the second step of `TestLiveCacheReads`).

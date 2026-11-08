@@ -32,7 +32,7 @@ case "$LOCAL_SHA" in
 esac
 
 case "$REMOTE_REF" in
-  refs/tags/*) exec ./preflight.sh --quick --format-only ;;
+  refs/tags/*) exec ./preflight.sh --quick --format-only --tip="$LOCAL_SHA" ;;
   refs/heads/*) ;;
   *) fail "remote ref must be refs/heads/* or refs/tags/*" ;;
 esac

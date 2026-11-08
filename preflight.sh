@@ -85,7 +85,7 @@ secrets_gate() {
     fail "credential-shaped string in the tree (files above)"
   fi
   if git rev-parse --verify --quiet origin/main >/dev/null; then
-    git log -p --format='%H%n%B' "$TIP" --not origin/main | grep -q -E "$SECRET_RE" \
+    git log -p -m --format='%H%n%B' "$TIP" --not origin/main | grep -q -E "$SECRET_RE" \
       && fail "credential-shaped string in an unpublished commit; rewrite it before pushing"
   fi
   printf 'ok\n'
@@ -93,7 +93,15 @@ secrets_gate() {
 
 gofmt_gate() {
   printf '=== preflight: gofmt ===\n'
-  UNFORMATTED=$(gofmt -l .) || fail "gofmt"
+  if [ "$TIP" = HEAD ]; then
+    UNFORMATTED=$(gofmt -l .) || fail "gofmt"
+  else
+    # Check the commit being pushed, not the working tree.
+    TMP=$(mktemp -d) || fail "mktemp"
+    git archive "$TIP" | tar -x -C "$TMP" || { rm -rf "$TMP"; fail "git archive $TIP"; }
+    UNFORMATTED=$(cd "$TMP" && gofmt -l .) || { rm -rf "$TMP"; fail "gofmt"; }
+    rm -rf "$TMP"
+  fi
   [ -z "$UNFORMATTED" ] || fail "unformatted files (run gofmt -w):
 $UNFORMATTED"
   printf 'ok\n'
