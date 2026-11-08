@@ -48,6 +48,12 @@ func TestUsageErrors(t *testing.T) {
 	if err := os.Symlink(ws, link); err != nil {
 		t.Fatal(err)
 	}
+	target := filepath.Join(ws, "hist.json")
+	os.WriteFile(target, nil, 0o600)
+	sessLink := filepath.Join(t.TempDir(), "s.json")
+	if err := os.Symlink(target, sessLink); err != nil {
+		t.Fatal(err)
+	}
 	cases := []struct {
 		name  string
 		args  []string
@@ -66,6 +72,10 @@ func TestUsageErrors(t *testing.T) {
 		{"unknown flag", []string{"exec", "--nope", "x"}, "", keyEnv},
 		{"workspace is file", []string{"exec", "--workspace", file, "x"}, "", keyEnv},
 		{"session in workspace", []string{"exec", "--workspace", ws, "--session", filepath.Join(ws, "s.json"), "x"}, "", keyEnv},
+		{"session final symlink", []string{"exec", "--workspace", ws, "--session", sessLink, "x"}, "", keyEnv},
+		{"zero max-steps", []string{"exec", "--max-steps", "0", "x"}, "", keyEnv},
+		{"negative max-tokens", []string{"exec", "--max-tokens", "-1", "x"}, "", keyEnv},
+		{"zero timeout", []string{"exec", "--timeout", "0s", "x"}, "", keyEnv},
 		{"session via symlink", []string{"exec", "--workspace", ws, "--session", filepath.Join(link, "s.json"), "x"}, "", keyEnv},
 	}
 	for _, tc := range cases {
@@ -107,5 +117,12 @@ func TestEnvRepeatable(t *testing.T) {
 	}
 	if len(c.EnvNames) != 2 || c.EnvNames[0] != "B_VAR" || c.EnvNames[1] != "A_VAR" {
 		t.Fatalf("env names: %v", c.EnvNames)
+	}
+}
+
+func TestEnvErrorDoesNotEchoValue(t *testing.T) {
+	_, err := Parse([]string{"exec", "--env", "1BAD=topsecret", "x"}, strings.NewReader(""), keyEnv)
+	if err == nil || strings.Contains(err.Error(), "topsecret") {
+		t.Fatalf("error leaks value: %v", err)
 	}
 }

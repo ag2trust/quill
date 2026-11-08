@@ -95,6 +95,9 @@ func Parse(args []string, stdin io.Reader, getenv func(string) string) (Config, 
 		return Config{}, usagef("prompt is empty")
 	}
 
+	if c.MaxSteps <= 0 || c.MaxTokens <= 0 || c.Timeout <= 0 {
+		return Config{}, usagef("--max-steps, --max-tokens and --timeout must be greater than zero")
+	}
 	switch c.Effort {
 	case "low", "medium", "high", "xhigh", "max":
 	default:
@@ -111,7 +114,8 @@ func Parse(args []string, stdin io.Reader, getenv func(string) string) (Config, 
 			return Config{}, usagef("--env ANTHROPIC_API_KEY is not allowed")
 		}
 		if !envName.MatchString(n) {
-			return Config{}, usagef("invalid --env name %q", n)
+			name, _, _ := strings.Cut(n, "=")
+			return Config{}, usagef("invalid --env name (before '='): %q", name)
 		}
 	}
 	c.EnvNames = []string(envs)
@@ -143,6 +147,9 @@ func Parse(args []string, stdin io.Reader, getenv func(string) string) (Config, 
 			return Config{}, usagef("--session parent directory must exist: %v", err)
 		}
 		resolved := filepath.Join(parent, filepath.Base(abs))
+		if full, err := filepath.EvalSymlinks(resolved); err == nil {
+			resolved = full
+		}
 		if rel, err := filepath.Rel(ws, resolved); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return Config{}, usagef("--session must not be inside the workspace")
 		}
