@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"unicode/utf8"
 )
 
 const (
@@ -22,7 +23,21 @@ const (
 	searchBinaryProbe = 8 << 10
 )
 
+const searchMaxLine = 500
+
 var errSearchDone = errors.New("search done")
+
+// clipLine cuts s to at most searchMaxLine bytes on a rune boundary.
+func clipLine(s string) string {
+	if len(s) <= searchMaxLine {
+		return s
+	}
+	cut := searchMaxLine
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
+}
 
 // search walks from path in lexical order and reports matching lines as
 // relpath:line: text. It opens only regular files and never follows symlinks.
@@ -52,11 +67,15 @@ func (r *Registry) search(ctx context.Context, input json.RawMessage) Result {
 
 	var out strings.Builder
 	n := 0
+	more := false
 	walkErr := filepath.WalkDir(start, func(path string, d fs.DirEntry, err error) error {
 		if cerr := ctx.Err(); cerr != nil {
 			return cerr
 		}
 		if err != nil {
+			if path == start {
+				return err
+			}
 			if d != nil && d.IsDir() {
 				return fs.SkipDir
 			}
@@ -76,7 +95,7 @@ func (r *Registry) search(ctx context.Context, input json.RawMessage) Result {
 			return nil
 		}
 		rel = filepath.ToSlash(rel)
-		return searchFile(ctx, path, rel, re, &out, &n)
+		return searchFile(ctx, path, rel, re, &out, &n, &more)
 	})
 	if walkErr != nil && !errors.Is(walkErr, errSearchDone) {
 		return errResult("search: %v", walkErr)
@@ -85,13 +104,13 @@ func (r *Registry) search(ctx context.Context, input json.RawMessage) Result {
 		return Result{Content: "no matches"}
 	}
 	res := strings.TrimSuffix(out.String(), "\n")
-	if n >= searchMaxMatches {
+	if more {
 		res += "\n[stopped after 200 matches]"
 	}
 	return Result{Content: res}
 }
 
-func searchFile(ctx context.Context, path, rel string, re *regexp.Regexp, out *strings.Builder, n *int) error {
+func searchFile(ctx context.Context, path, rel string, re *regexp.Regexp, out *strings.Builder, n *int, more *bool) error {
 	// O_NONBLOCK and O_NOFOLLOW guard against a file swapped for a FIFO or symlink after the walk saw it.
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
@@ -125,11 +144,12 @@ func searchFile(ctx context.Context, path, rel string, re *regexp.Regexp, out *s
 		if !re.MatchString(text) {
 			continue
 		}
-		out.WriteString(rel + ":" + strconv.Itoa(line) + ": " + text + "\n")
-		*n++
 		if *n >= searchMaxMatches {
+			*more = true
 			return errSearchDone
 		}
+		out.WriteString(rel + ":" + strconv.Itoa(line) + ": " + clipLine(text) + "\n")
+		*n++
 	}
 	return nil
 }
