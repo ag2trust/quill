@@ -488,11 +488,11 @@ func TestCancelDuringTool(t *testing.T) {
 	if results[0].ToolUseID != "w" || results[0].IsError || results[0].Content == "not run: cancelled" {
 		t.Errorf("completed tool result %+v", results[0])
 	}
-	for i, id := range []string{"s", "w2"} {
-		r := results[i+1]
-		if r.ToolUseID != id || !r.IsError || r.Content != "not run: cancelled" {
-			t.Errorf("result %d %+v", i+1, r)
-		}
+	if r := results[1]; r.ToolUseID != "s" || !r.IsError || r.Content != "interrupted: it may have partly run" {
+		t.Errorf("in-progress tool result %+v", r)
+	}
+	if r := results[2]; r.ToolUseID != "w2" || !r.IsError || r.Content != "not run: cancelled" {
+		t.Errorf("later tool result %+v", r)
 	}
 
 	evs := h.events(t)
@@ -512,7 +512,7 @@ func TestCancelDuringTool(t *testing.T) {
 	}
 	want := []ev{
 		{"item.started", "w", "", false}, {"item.completed", "w", "", false},
-		{"item.started", "s", "", false}, {"item.completed", "s", "interrupted", true},
+		{"item.started", "s", "", false}, {"item.completed", "s", "interrupted: it may have partly run", true},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("tool events %+v", got)
@@ -548,7 +548,7 @@ func TestTimeoutIsLimit(t *testing.T) {
 		if len(h.store.msgs) != 3 {
 			t.Fatalf("store has %d messages", len(h.store.msgs))
 		}
-		if r := decodeUser(t, h.store.msgs[2]).Content; len(r) != 1 || r[0].Content != "not run: cancelled" || !r[0].IsError {
+		if r := decodeUser(t, h.store.msgs[2]).Content; len(r) != 1 || r[0].Content != "interrupted: it may have partly run" || !r[0].IsError {
 			t.Fatalf("results %+v", r)
 		}
 	})

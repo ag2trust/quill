@@ -38,6 +38,13 @@ func main() {
 // contents, or secrets.
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) (code int) {
 	start := time.Now()
+	// Catch SIGPIPE so a write to a closed stdout or stderr returns EPIPE
+	// instead of killing quill before cleanup. Notify, not Ignore: an ignored
+	// signal stays ignored across exec, which would change how tool
+	// pipelines behave; a caught one is reset to default in children.
+	sigpipe := make(chan os.Signal, 1)
+	signal.Notify(sigpipe, syscall.SIGPIPE)
+	defer signal.Stop(sigpipe)
 	cfg, err := cli.Parse(args, stdin, getenv)
 	if err != nil {
 		fmt.Fprintf(stderr, "quill: %v\n", err)
@@ -56,12 +63,22 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 	ctx, cancelRun := context.WithCancel(sigCtx)
 	limitCtx, cancelLimit := context.WithTimeout(context.Background(), cfg.Timeout)
 
+	// Settings: from the flags, or from the session header when continuing.
+	model, effort, sandbox := cfg.Model, cfg.Effort, cfg.Sandbox
 	var (
-		sess   *session.File
-		runner *proc.Runner
-		tmpDir string
-		done   bool
+		sess    *session.File
+		runner  *proc.Runner
+		tmpDir  string
+		done    bool
+		started bool
 	)
+	startRun := func() {
+		started = true
+		_ = ew.RunStarted(events.RunStarted{
+			Session: cfg.SessionPath, Model: model, Effort: effort, Sandbox: sandbox,
+			Workspace: cfg.Workspace, Version: events.Version, EnvPassed: append([]string{}, cfg.EnvNames...),
+		})
+	}
 	cleanup := func() {
 		if done {
 			return
@@ -97,6 +114,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 		if r := recover(); r != nil {
 			// Only the panic value's type: its text could carry file contents.
 			fmt.Fprintf(stderr, "quill: internal error: panic (%T)\n", r)
+			if !started {
+				startRun()
+			}
 			code = finish(events.RunCompleted{
 				Status: events.StatusInternalError,
 				Error:  &events.ErrorInfo{Kind: "internal", Message: "panic"},
@@ -104,8 +124,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 		}
 	}()
 
-	// Settings: from the flags, or from the session header when continuing.
-	model, effort, sandbox := cfg.Model, cfg.Effort, cfg.Sandbox
 	system := prompt.System()
 	toolDefs := tools.NewRegistry(tools.Profile(sandbox), cfg.Workspace, nil).Definitions()
 	var store session.Store = session.Discard{}
@@ -143,11 +161,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 		}
 	}
 
-	envPassed := append([]string{}, cfg.EnvNames...)
-	_ = ew.RunStarted(events.RunStarted{
-		Session: cfg.SessionPath, Model: model, Effort: effort, Sandbox: sandbox,
-		Workspace: cfg.Workspace, Version: events.Version, EnvPassed: envPassed,
-	})
+	startRun()
 
 	var next json.RawMessage
 	if len(history) == 0 {
@@ -159,7 +173,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 		return internal("build message", err)
 	}
 
-	tmpDir, err = os.MkdirTemp("", "quill-run-*")
+	tmpDir, err = os.MkdirTemp(getenv("TMPDIR"), "quill-run-*")
 	if err != nil {
 		return internal("create temp dir", err)
 	}

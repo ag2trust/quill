@@ -72,7 +72,35 @@ func runQuill(t *testing.T, fake *fakeapi.Server, stdin string, args ...string) 
 	}
 	r := result{code: cmd.ProcessState.ExitCode(), stdout: out.String(), stderr: errb.String()}
 	r.lines = parseLines(t, r.stdout)
+	checkStream(t, r.code, r.lines)
 	return r
+}
+
+// checkStream checks the stdout contract: nothing on exit 2, otherwise
+// run.started first and exactly one run.completed, last.
+func checkStream(t *testing.T, code int, lines []map[string]any) {
+	t.Helper()
+	if code == 2 {
+		if len(lines) != 0 {
+			t.Errorf("exit 2 wrote %d stdout lines", len(lines))
+		}
+		return
+	}
+	if len(lines) == 0 {
+		t.Fatalf("exit %d with no stdout lines", code)
+	}
+	if lines[0]["type"] != "run.started" {
+		t.Errorf("first line type = %v, want run.started", lines[0]["type"])
+	}
+	n := 0
+	for _, l := range lines {
+		if l["type"] == "run.completed" {
+			n++
+		}
+	}
+	if n != 1 || lines[len(lines)-1]["type"] != "run.completed" {
+		t.Errorf("want exactly one run.completed, last; got %d, last type %v", n, lines[len(lines)-1]["type"])
+	}
 }
 
 // parseLines checks every stdout line is a JSON object and decodes it.
@@ -169,7 +197,9 @@ func TestE2EUsageError(t *testing.T) {
 	cmd := quillCmd(fake, t.TempDir(), "", "exec")
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
-	cmd.Run()
+	if _, ok := cmd.Run().(*exec.ExitError); !ok {
+		t.Fatal("quill did not exit with an error status")
+	}
 	if code := cmd.ProcessState.ExitCode(); code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
@@ -223,21 +253,27 @@ func TestE2EBlockedThenResume(t *testing.T) {
 }
 
 func TestE2EResumeModelMismatch(t *testing.T) {
-	ws, sess := t.TempDir(), filepath.Join(t.TempDir(), "s.jsonl")
-	r := runQuill(t, fakeapi.New(t, fakeapi.TextReply("done", events.Usage{})), "task", "--workspace", ws, "--session", sess)
-	if r.code != 0 {
-		t.Fatalf("run 1 exit = %d; stderr: %s", r.code, r.stderr)
-	}
-	fake2 := fakeapi.New(t)
-	r = runQuill(t, fake2, "more", "--workspace", ws, "--session", sess, "--model", "claude-haiku-5-5")
-	if r.code != 2 {
-		t.Fatalf("exit = %d, want 2", r.code)
-	}
-	if r.stdout != "" || r.stderr == "" {
-		t.Errorf("stdout = %q, stderr = %q", r.stdout, r.stderr)
-	}
-	if n := len(fake2.Requests()); n != 0 {
-		t.Errorf("sent %d requests", n)
+	for _, flag := range [][]string{
+		{"--model", "claude-haiku-5-5"}, {"--effort", "low"}, {"--sandbox", "read-only"},
+	} {
+		t.Run(flag[0][2:], func(t *testing.T) {
+			ws, sess := t.TempDir(), filepath.Join(t.TempDir(), "s.jsonl")
+			r := runQuill(t, fakeapi.New(t, fakeapi.TextReply("done", events.Usage{})), "task", "--workspace", ws, "--session", sess)
+			if r.code != 0 {
+				t.Fatalf("run 1 exit = %d; stderr: %s", r.code, r.stderr)
+			}
+			fake2 := fakeapi.New(t)
+			r = runQuill(t, fake2, "more", append([]string{"--workspace", ws, "--session", sess}, flag...)...)
+			if r.code != 2 {
+				t.Fatalf("exit = %d, want 2", r.code)
+			}
+			if r.stdout != "" || !strings.Contains(r.stderr, flag[0]) {
+				t.Errorf("stdout = %q, stderr = %q", r.stdout, r.stderr)
+			}
+			if n := len(fake2.Requests()); n != 0 {
+				t.Errorf("sent %d requests", n)
+			}
+		})
 	}
 }
 
@@ -276,25 +312,38 @@ func sigtermMidShell(t *testing.T, marker string, tmp string, args ...string) (c
 	}
 	start := time.Now()
 	cmd.Process.Signal(syscall.SIGTERM)
-	rest, _ := io.ReadAll(stdout)
-	out.Write(rest)
-	done := make(chan struct{})
-	go func() { cmd.Wait(); close(done) }()
+	done := make(chan []byte)
+	go func() {
+		rest, _ := io.ReadAll(stdout)
+		cmd.Wait()
+		done <- rest
+	}()
 	select {
-	case <-done:
+	case rest := <-done:
+		elapsed = time.Since(start)
+		out.Write(rest)
 	case <-time.After(10 * time.Second):
 		cmd.Process.Kill()
+		<-done
 		t.Fatal("quill did not exit within 10 s of SIGTERM")
 	}
-	return cmd.ProcessState.ExitCode(), parseLines(t, out.String()), time.Since(start)
+	code, lines = cmd.ProcessState.ExitCode(), parseLines(t, out.String())
+	checkStream(t, code, lines)
+	return code, lines, elapsed
 }
 
 func TestE2ESigterm(t *testing.T) {
-	const marker = "sleep 31.5"
+	const marker = "sleep 31.57"
 	tmp := t.TempDir()
-	code, lines, _ := sigtermMidShell(t, marker, tmp, "--workspace", t.TempDir())
+	code, lines, elapsed := sigtermMidShell(t, marker, tmp, "--workspace", t.TempDir())
 	if code != 143 {
 		t.Fatalf("exit = %d, want 143", code)
+	}
+	if elapsed >= 10*time.Second {
+		t.Errorf("exit took %v after SIGTERM", elapsed)
+	}
+	if len(lines) == 0 {
+		t.Fatal("no stdout lines")
 	}
 	l := lines[len(lines)-1]
 	if l["type"] != "run.completed" || l["status"] != "cancelled" {
@@ -311,9 +360,12 @@ func TestE2ESigterm(t *testing.T) {
 
 func TestE2EResumeAfterCancel(t *testing.T) {
 	ws, sess := t.TempDir(), filepath.Join(t.TempDir(), "s.jsonl")
-	code, _, _ := sigtermMidShell(t, "sleep 32.5", t.TempDir(), "--workspace", ws, "--session", sess)
+	code, _, elapsed := sigtermMidShell(t, "sleep 32.57", t.TempDir(), "--workspace", ws, "--session", sess)
 	if code != 143 {
 		t.Fatalf("run 1 exit = %d, want 143", code)
+	}
+	if elapsed >= 10*time.Second {
+		t.Errorf("exit took %v after SIGTERM", elapsed)
 	}
 	fake := fakeapi.New(t, fakeapi.TextReply("ok", events.Usage{}))
 	r := runQuill(t, fake, "continue", "--workspace", ws, "--session", sess)
@@ -326,14 +378,14 @@ func TestE2EResumeAfterCancel(t *testing.T) {
 	for _, raw := range req.Messages {
 		roles = append(roles, decodeMsg(t, raw).Role)
 	}
-	// The cancelled run saved the tool_result ("not run: cancelled"), so the
+	// The cancelled run saved the interrupted call's tool_result, so the
 	// resume prompt follows as a second consecutive user message; the API
 	// combines consecutive user turns.
 	if got := strings.Join(roles, ","); got != "user,assistant,user,user" {
 		t.Fatalf("roles = %s", got)
 	}
 	cancelled := decodeMsg(t, req.Messages[2])
-	if cancelled.Content[0].Type != "tool_result" || cancelled.Content[0].Content != "not run: cancelled" {
+	if cancelled.Content[0].Type != "tool_result" || cancelled.Content[0].Content != "interrupted: it may have partly run" {
 		t.Errorf("message 2 = %s", req.Messages[2])
 	}
 	resume := decodeMsg(t, req.Messages[3])
@@ -435,5 +487,34 @@ func TestE2EResumeInheritsSandbox(t *testing.T) {
 	res := decodeMsg(t, req.Messages[len(req.Messages)-1])
 	if res.Content[0].Type != "tool_result" || res.Content[0].Content != "unknown tool: write" {
 		t.Errorf("tool result = %s", req.Messages[len(req.Messages)-1])
+	}
+}
+
+func TestE2EStdoutClosed(t *testing.T) {
+	fake := fakeapi.New(t,
+		fakeapi.ToolReply("tu1", "write", `{"path":"hello.txt","content":"hi"}`),
+		fakeapi.TextReply("done", events.Usage{}),
+	)
+	ws, tmp := t.TempDir(), t.TempDir()
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr.Close() // every stdout write now fails with EPIPE
+	cmd := quillCmd(fake, tmp, "write hello", "exec", "--workspace", ws, "-")
+	cmd.Stdout = pw
+	err = cmd.Run()
+	pw.Close()
+	if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		t.Fatalf("quill was killed by %v", ws.Signal())
+	}
+	if err != nil {
+		t.Fatalf("exit: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(ws, "hello.txt")); err != nil || string(b) != "hi" {
+		t.Errorf("hello.txt = %q, %v", b, err)
+	}
+	if entries, err := os.ReadDir(tmp); err != nil || len(entries) != 0 {
+		t.Errorf("TMPDIR not empty after exit: %v, %v", entries, err)
 	}
 }

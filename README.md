@@ -160,8 +160,9 @@ damage, the agent stops instead of guessing.
 - On SIGTERM, SIGINT, or run timeout, Quill stops every command group (SIGTERM, then SIGKILL
   after a few seconds), writes `run.completed` with status `cancelled` or `limit_reached`, and
   exits.
-- A run stopped during tool calls saves the real results of the tools that ran, and
-  "not run: cancelled" for the rest.
+- A run stopped during tool calls saves its tool results: tools that finished get their real
+  results, the call in progress gets "interrupted: it may have partly run", and the rest get
+  "not run: cancelled".
 - Quill removes everything it created: processes, temporary files, and temporary directories.
   The agent's changes to the workspace are the result of the task and stay.
 - Callers stop Quill with SIGTERM, and SIGKILL only if it has not exited after about 10
@@ -173,7 +174,10 @@ damage, the agent stops instead of guessing.
 - Events: `run.started`, `item.started`, `item.completed` (assistant messages and tool calls
   with name and input), and `run.completed`.
 - Exactly one `run.completed`, always the last line, except after SIGKILL. No `run.completed`
-  means Quill crashed, except exit 2, which reports on stderr only.
+  means Quill crashed, except exit 2, which reports on stderr only. A Go runtime crash also
+  exits 2, but normally after `run.started`, so stdout is non-empty and has no
+  `run.completed`. A SIGTERM or SIGINT before
+  the prompt is read ends Quill with no output.
 
 ```json
 {"type":"run.completed","status":"completed","final_text":"Fixed the flaky test by ...",
@@ -193,7 +197,7 @@ damage, the agent stops instead of guessing.
 | 3 | `limit_reached` | Steps, tokens, or time ran out |
 | 4 | `provider_error` | See `error.kind` |
 | 5 | `blocked` | Waiting for input. See `blocker` |
-| 143 | `cancelled` | Stopped by SIGTERM |
+| 143 | `cancelled` | Stopped by SIGTERM or SIGINT |
 
 - Provider errors are classified from HTTP status and API error type only, never from text.
   Each `error` also carries `http_status`, the API's `type`, `message`, and `request_id`.

@@ -19,6 +19,7 @@ const (
 	continueText = "Your previous response hit the output limit. Continue, using smaller steps."
 	cutOffText   = "Your response hit the output limit and this tool call was cut off, so it was not run. Retry using smaller steps."
 	notRunText   = "not run: cancelled"
+	partialText  = "interrupted: it may have partly run"
 )
 
 // Options are the fixed settings of a run.
@@ -192,7 +193,8 @@ func (l *Loop) Run(ctx, limitCtx context.Context, next ...json.RawMessage) event
 }
 
 // runTools runs the calls sequentially, in order. If the run is stopped, the
-// call in progress and the rest get notRunText and stopped is the status.
+// call in progress gets partialText, the rest get notRunText, and stopped is
+// the status.
 func (l *Loop) runTools(ctx context.Context, uses []provider.ToolUse, interrupted func() (events.Status, bool)) (results []toolResult, stopped events.Status) {
 	results = make([]toolResult, 0, len(uses))
 	for _, tu := range uses {
@@ -206,9 +208,10 @@ func (l *Loop) runTools(ctx context.Context, uses []provider.ToolUse, interrupte
 		l.emitStarted(tu)
 		r := l.runTool(ctx, tu)
 		if stopped, _ = interrupted(); stopped != "" {
-			// The stop may have cut the result short; it is not reported as real.
-			l.emitCompleted(toolItem(tu, "interrupted", true))
-			results = append(results, toolResult{"tool_result", tu.ID, notRunText, true})
+			// The call started and may have had effects, but the stop may
+			// have cut its result short, so the result is not reported.
+			l.emitCompleted(toolItem(tu, partialText, true))
+			results = append(results, toolResult{"tool_result", tu.ID, partialText, true})
 			continue
 		}
 		l.emitCompleted(toolItem(tu, r.Content, r.IsError))
