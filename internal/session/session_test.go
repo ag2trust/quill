@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -89,7 +90,10 @@ func TestLocked(t *testing.T) {
 
 func TestTruncatedLastLine(t *testing.T) {
 	p := create(t)
-	fh, _ := os.OpenFile(p, os.O_WRONLY|os.O_APPEND, 0)
+	fh, err := os.OpenFile(p, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	fh.WriteString(`{"type":"mess`)
 	fh.Close()
 	f, _, err := Open(p, Header{})
@@ -104,7 +108,7 @@ func TestTruncatedLastLine(t *testing.T) {
 	}
 	f.Close()
 	b, _ := os.ReadFile(p)
-	if b[len(b)-1] != '\n' || bytes.Contains(b, []byte(`{"type":"mess{`)) {
+	if b[len(b)-1] != '\n' {
 		t.Fatalf("bad file: %q", b)
 	}
 	g, _, err := Open(p, Header{})
@@ -203,5 +207,60 @@ func TestDiscard(t *testing.T) {
 	var s Store = Discard{}
 	if err := s.Append(msg1); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCompleteLastLineMissingNewline(t *testing.T) {
+	p := create(t)
+	b, _ := os.ReadFile(p)
+	if err := os.WriteFile(p, b[:len(b)-1], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, _, err := Open(p, Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Messages) != 2 || !bytes.Equal(f.Messages[1], msg2) {
+		t.Fatalf("messages: %q", f.Messages)
+	}
+	f.Close()
+	b2, _ := os.ReadFile(p)
+	if !bytes.Equal(b, b2) {
+		t.Fatalf("want newline added: %q", b2)
+	}
+}
+
+func TestEmptyFileIsLocked(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "s")
+	if err := os.WriteFile(p, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Open(p, testHeader()); !errors.Is(err, ErrLocked) {
+		t.Fatalf("want ErrLocked, got %v", err)
+	}
+}
+
+func TestRefusesFIFO(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "fifo")
+	if err := syscall.Mkfifo(p, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Open(p, Header{}); err == nil {
+		t.Fatal("want error")
+	}
+}
+
+func TestAppendFailureMarksBroken(t *testing.T) {
+	p := create(t)
+	f, _, err := Open(p, Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.f.Close() // force write failure
+	if err := f.Append(msg1); err == nil {
+		t.Fatal("want write error")
+	}
+	if err := f.Append(msg1); err == nil || len(f.Messages) != 2 {
+		t.Fatal("want broken error and no recorded message")
 	}
 }

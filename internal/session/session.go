@@ -41,6 +41,7 @@ type File struct {
 	Header   Header
 	Messages []json.RawMessage
 	f        *os.File
+	broken   bool
 }
 
 // Open creates the file with header h if missing, or loads it (ignoring h).
@@ -64,6 +65,7 @@ func Open(path string, h Header) (*File, bool, error) {
 		}
 		if err != nil {
 			fd.Close()
+			os.Remove(path) // best effort: never leave a headerless file
 			return nil, false, fmt.Errorf("write session header: %w", err)
 		}
 		sf.Header = h
@@ -75,6 +77,10 @@ func Open(path string, h Header) (*File, bool, error) {
 	fd, err = os.OpenFile(path, os.O_RDWR|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, false, err
+	}
+	if st, err := fd.Stat(); err != nil || !st.Mode().IsRegular() {
+		fd.Close()
+		return nil, false, fmt.Errorf("session path %s is not a regular file", path)
 	}
 	if err := lock(fd); err != nil {
 		fd.Close()
@@ -131,7 +137,8 @@ func (s *File) load() error {
 		}
 	}
 	if valid == 0 {
-		return errors.New("session file has no header")
+		// Empty: another run is still creating it (header not yet written).
+		return ErrLocked
 	}
 	lines := bytes.Split(data[:valid-1], []byte("\n"))
 	if err := json.Unmarshal(lines[0], &s.Header); err != nil {
@@ -162,6 +169,9 @@ func (s *File) load() error {
 
 // Append writes one message line and syncs. msg is stored byte-for-byte.
 func (s *File) Append(msg json.RawMessage) error {
+	if s.broken {
+		return errors.New("session file is broken by an earlier write failure")
+	}
 	if bytes.IndexByte(msg, '\n') >= 0 {
 		return errors.New("session message contains a newline")
 	}
@@ -172,10 +182,18 @@ func (s *File) Append(msg json.RawMessage) error {
 	line = append(line, `{"type":"message","message":`...)
 	line = append(line, msg...)
 	line = append(line, "}\n"...)
+	off, err := s.f.Seek(0, io.SeekCurrent)
+	if err != nil {
+		s.broken = true
+		return err
+	}
 	if _, err := s.f.Write(line); err != nil {
+		s.broken = true
+		s.f.Truncate(off) // best effort: drop any partial line
 		return err
 	}
 	if err := s.f.Sync(); err != nil {
+		s.broken = true
 		return err
 	}
 	s.Messages = append(s.Messages, append(json.RawMessage(nil), msg...))
