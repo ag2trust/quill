@@ -4,16 +4,18 @@
 # Gates (in order, fail-fast):
 #   1. branch base — the branch's own commits sit on origin/main, not on another
 #                    feature branch
-#   2. gofmt       — no unformatted files
-#   3. go vet      — ./...
-#   4. go test     — ./... -count=1
-#   5. build       — CGO_ENABLED=0 for linux/amd64, linux/arm64, darwin/arm64
+#   2. secrets     — no credential-shaped strings in the tree or unpublished commits
+#                    (this repo is public)
+#   3. gofmt       — no unformatted files
+#   4. go vet      — ./...
+#   5. go test     — ./... -count=1
+#   6. build       — CGO_ENABLED=0 for linux/amd64, linux/arm64, darwin/arm64
 #
 # Usage:
 #   ./preflight.sh                     # all gates
-#   ./preflight.sh --quick             # gates 1+2 (what the pre-push hook runs)
-#   ./preflight.sh --ci                # gates 2-5 (CI has no branch context)
-#   ./preflight.sh --quick --format-only        # gate 2 only (tag pushes)
+#   ./preflight.sh --quick             # gates 1-3 (what the pre-push hook runs)
+#   ./preflight.sh --ci                # gates 2-6 (CI has no branch context)
+#   ./preflight.sh --quick --format-only        # gates 2+3 (tag pushes)
 #   ./preflight.sh --quick --tip=SHA --target=BRANCH   # pre-push hook form
 #
 # Do not bypass the pre-push hook with --no-verify; fix the cause instead.
@@ -71,6 +73,24 @@ branch_base() {
   printf 'ok\n'
 }
 
+# Credential shapes: Anthropic, GitHub, AWS, Slack, private keys.
+SECRET_RE='sk-ant-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{40,}|AKIA[0-9A-Z]{16}|xox[abposr]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+
+secrets_gate() {
+  printf '=== preflight: secrets ===\n'
+  # The tree being pushed, plus every unpublished commit's patch and message:
+  # a secret added and later deleted is still published with the history.
+  if git grep -I -q -E "$SECRET_RE" "$TIP" -- . 2>/dev/null; then
+    git grep -I -l -E "$SECRET_RE" "$TIP" -- . >&2
+    fail "credential-shaped string in the tree (files above)"
+  fi
+  if git rev-parse --verify --quiet origin/main >/dev/null; then
+    git log -p --format='%H%n%B' "$TIP" --not origin/main | grep -q -E "$SECRET_RE" \
+      && fail "credential-shaped string in an unpublished commit; rewrite it before pushing"
+  fi
+  printf 'ok\n'
+}
+
 gofmt_gate() {
   printf '=== preflight: gofmt ===\n'
   UNFORMATTED=$(gofmt -l .) || fail "gofmt"
@@ -82,6 +102,7 @@ $UNFORMATTED"
 if [ "$FORMAT_ONLY" -eq 0 ] && [ "$CI" -eq 0 ]; then
   branch_base
 fi
+secrets_gate
 gofmt_gate
 [ "$QUICK" -eq 1 ] && exit 0
 

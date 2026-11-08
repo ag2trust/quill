@@ -6,8 +6,9 @@ caller-specific code, names, or concepts.
 
 ## Rules
 
-- This repository is public. Never commit API keys, tokens, customer data, or run
-  transcripts.
+- This repository is public and open source. Never commit secrets or sensitive data: API
+  keys, tokens, credentials, customer data, run transcripts or session files, personal
+  paths, or private account names. This includes commit messages and PR text.
 - The API key comes only from `ANTHROPIC_API_KEY` and must never reach tools.
 - Live API tests (`go test -tags live ./tests/live/`) cost money. Run them only with the
   owner's approval.
@@ -26,7 +27,7 @@ caller-specific code, names, or concepts.
 - Never branch from another feature branch. Do not rebase solely to become current.
 - Never force-push or delete `main`.
 - Commit, push, and open PRs with the default `ag2trust-dev` identity. Never override the
-  token or author as `brevitize`.
+  token or author with a personal account.
 - Use conventional commit subjects (`feat:`, `fix:`, `docs:`, `chore:`, `test:`) and end
   commits with the working session's `Co-Authored-By:` trailer.
 - Review without checking the PR branch out in the shared checkout. Use `gh pr diff`,
