@@ -18,6 +18,8 @@ const maxIgnoreFile = 1 << 20
 
 type ignoreRule struct {
 	base    string // workspace-relative directory of the ignore file; "" for the root
+	prefix  string // base + "/", or "" for the root
+	depth   int    // number of segments in base
 	segs    []string
 	negate  bool
 	dirOnly bool
@@ -35,6 +37,9 @@ func parseIgnore(base string, data []byte) []ignoreRule {
 			continue
 		}
 		r := ignoreRule{base: base}
+		if base != "" {
+			r.prefix, r.depth = base+"/", strings.Count(base, "/")+1
+		}
 		switch {
 		case line[0] == '!':
 			r.negate = true
@@ -84,11 +89,10 @@ func ignored(set *ruleSet, rel string, isDir bool) bool {
 			}
 			sub := segs
 			if r.base != "" {
-				n := strings.Count(r.base, "/") + 1
-				if len(segs) <= n || strings.Join(segs[:n], "/") != r.base {
+				if !strings.HasPrefix(rel, r.prefix) {
 					continue
 				}
-				sub = segs[n:]
+				sub = segs[r.depth:]
 			}
 			if matchSegs(r.segs, sub) {
 				return !r.negate
