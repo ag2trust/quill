@@ -38,11 +38,11 @@ func TestDefinitionsStable(t *testing.T) {
 	if !bytes.Equal(a, b) {
 		t.Fatal("definitions differ")
 	}
-	if got := names(t, a); !reflect.DeepEqual(got, []string{"read", "list", "search", "raise_blocker"}) {
+	if got := names(t, a); !reflect.DeepEqual(got, []string{"read", "list", "glob", "search", "raise_blocker"}) {
 		t.Fatalf("read-only names: %v", got)
 	}
 	w := NewRegistry(WorkspaceWrite, "/x", nil).Definitions()
-	want := []string{"read", "write", "edit", "list", "search", "shell", "raise_blocker"}
+	want := []string{"read", "write", "edit", "list", "glob", "search", "shell", "raise_blocker"}
 	if got := names(t, w); !reflect.DeepEqual(got, want) {
 		t.Fatalf("write names: %v", got)
 	}
@@ -143,7 +143,7 @@ func TestDefinitionsCopy(t *testing.T) {
 
 // Changing tool definitions invalidates every cached session prefix; update these hashes deliberately.
 func TestDefinitionsGolden(t *testing.T) {
-	for p, want := range map[Profile]string{WorkspaceWrite: "45b7cd12d749191e0682417814345daf77c321bb981326c6ccd178d0118677fc", ReadOnly: "069129b6f8c506d12d3faef41fad28433f73342762cf57eebb5422ceac7794c3"} {
+	for p, want := range map[Profile]string{WorkspaceWrite: "8ea5c78cc4c7fa9811062ade682d0daf060c0f045334af59c098dba7a11f863e", ReadOnly: "cbe82b833c847f7d429892da6009c7844e33fcb5f7377d0e498ed6081fc8f549"} {
 		sum := sha256.Sum256(NewRegistry(p, "/x", nil).Definitions())
 		if got := hex.EncodeToString(sum[:]); got != want {
 			t.Errorf("%s: sha256 %s, want %s", p, got, want)

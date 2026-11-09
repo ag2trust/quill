@@ -77,7 +77,8 @@ echo "$TASK" | quill exec [flags] -
 
 ### Tools (2026-11-07, details 2026-11-08)
 
-- `read`, `write`, `edit` (exact text), `list`, `search`, `shell`, and `raise_blocker`.
+- `read`, `write`, `edit` (exact text), `list`, `glob`, `search`, `shell`, and `raise_blocker`.
+  The read-only sandbox has `read`, `list`, `glob`, `search`, and `raise_blocker`.
 - Each shell command has a fixed 10-minute timeout. A timed-out command is killed and
   reported to the model as a tool error; the run continues.
 - Tool input is checked strictly; unknown fields are an error. The schemas are fixed in
@@ -89,8 +90,19 @@ echo "$TASK" | quill exec [flags] -
 - `edit` replaces `old_text`, which must match exactly one place unless `replace_all` is
   set. Otherwise it is a tool error saying the text was not found or how many places
   matched.
-- `search` takes a Go regular expression and an optional path. It skips `.git`, symlinks,
-  binary files, and files over 1 MB, cuts lines at 500 bytes, and stops after 200 matches.
+- `search` takes a Go regular expression, an optional path, an optional `glob` limiting
+  which files are searched, and `output_mode`: `content` (default, `path:line: text`) or
+  `files` (each matching file once). It skips `.git`, symlinks, binary files, files over
+  1 MB, and ignored paths, cuts lines at 500 bytes, and stops after 200 matches or files.
+- `glob` finds files by path pattern (`*`, `?`, `[...]`, `**`, `{a,b}`); a pattern without a
+  slash matches file names at any depth. It skips the same paths as `search` and stops
+  after 500 files. Patterns in both tools are relative to the given path.
+- Ignored paths (2026-11-08) follow `.gitignore` rules from `.git/info/exclude` and every
+  `.gitignore` inside the workspace; global excludes are not read. Quill parses them
+  itself and never runs `git`, because a hostile repository's git config can run commands
+  in Quill's process, which holds the API key. An explicit path into an ignored directory
+  is still searched. One call loads at most 5,000 rules and skips further ignore files, and
+  glob patterns are capped at 1,024 bytes, so hostile repositories cannot stall a search.
 - Tool output over 30,000 bytes keeps the first and last 15,000 bytes around a marker
   giving the number of bytes left out. The same output is always cut the same way, so the
   cache stays valid.

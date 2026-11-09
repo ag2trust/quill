@@ -83,10 +83,18 @@ var (
 		obj([]string{}, map[string]any{
 			"path": prop("string", "Directory path, relative to the workspace; defaults to '.'."),
 		})}
-	defSearch = definition{"search", "Search files under a path for lines matching a Go regular expression.",
+	defGlob = definition{"glob", "Find files by path pattern, such as **/*_test.go or src/**/*.{ts,tsx}. A pattern without a slash matches file names at any depth. Skips .git, symlinks, and paths ignored by .gitignore. Returns workspace-relative paths.",
 		obj([]string{"pattern"}, map[string]any{
-			"pattern": prop("string", "Go regular expression."),
+			"pattern": prop("string", "Glob matched against paths relative to path: * ? [...] within a segment, ** across segments, {a,b} alternatives."),
+			"path":    prop("string", "Directory to search, relative to the workspace; defaults to '.'."),
+		})}
+	defSearch = definition{"search", "Search file contents under a path for lines matching a Go regular expression. Skips .git, symlinks, binary files, and paths ignored by .gitignore.",
+		obj([]string{"pattern"}, map[string]any{
+			"pattern": prop("string", "Go regular expression; use (?i) for case-insensitive."),
 			"path":    prop("string", "File or directory to search, relative to the workspace; defaults to '.'."),
+			"glob":    prop("string", "Only search files matching this glob, such as *.go or src/**/*.{ts,tsx}."),
+			"output_mode": map[string]any{"type": "string", "enum": []string{"content", "files"},
+				"description": "content (default) returns path:line: text for each match; files returns each matching file once."},
 		})}
 	defShell = definition{"shell", "Run a shell command in the workspace and return its combined output and exit status.",
 		obj([]string{"command"}, map[string]any{
@@ -105,9 +113,9 @@ var blockerReasons = []string{"conflict", "unclear_task", "missing_access", "uns
 
 // NewRegistry builds a registry. shell may be nil (then the shell tool errors).
 func NewRegistry(profile Profile, workspace string, shell Shell) *Registry {
-	list := []definition{defRead, defList, defSearch, defBlocker}
+	list := []definition{defRead, defList, defGlob, defSearch, defBlocker}
 	if profile == WorkspaceWrite {
-		list = []definition{defRead, defWrite, defEdit, defList, defSearch, defShell, defBlocker}
+		list = []definition{defRead, defWrite, defEdit, defList, defGlob, defSearch, defShell, defBlocker}
 	}
 	allowed := map[string]bool{}
 	for _, d := range list {
@@ -149,6 +157,8 @@ func (r *Registry) dispatch(ctx context.Context, name string, input json.RawMess
 		return r.edit(input)
 	case "list":
 		return r.list(input)
+	case "glob":
+		return r.glob(ctx, input)
 	case "search":
 		return r.search(ctx, input)
 	case "shell":
