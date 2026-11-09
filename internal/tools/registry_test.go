@@ -143,7 +143,7 @@ func TestDefinitionsCopy(t *testing.T) {
 
 // Changing tool definitions invalidates every cached session prefix; update these hashes deliberately.
 func TestDefinitionsGolden(t *testing.T) {
-	for p, want := range map[Profile]string{WorkspaceWrite: "8ea5c78cc4c7fa9811062ade682d0daf060c0f045334af59c098dba7a11f863e", ReadOnly: "cbe82b833c847f7d429892da6009c7844e33fcb5f7377d0e498ed6081fc8f549"} {
+	for p, want := range map[Profile]string{WorkspaceWrite: "5354c17cf17d8ab14f2d7bae3bf9a99f5951cf23d6c57820eca6f6f24ed9cecb", ReadOnly: "cbe82b833c847f7d429892da6009c7844e33fcb5f7377d0e498ed6081fc8f549"} {
 		sum := sha256.Sum256(NewRegistry(p, "/x", nil).Definitions())
 		if got := hex.EncodeToString(sum[:]); got != want {
 			t.Errorf("%s: sha256 %s, want %s", p, got, want)

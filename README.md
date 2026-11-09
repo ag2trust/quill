@@ -79,6 +79,8 @@ echo "$TASK" | quill exec [flags] -
 
 - `read`, `write`, `edit` (exact text), `list`, `glob`, `search`, `shell`, and `raise_blocker`.
   The read-only sandbox has `read`, `list`, `glob`, `search`, and `raise_blocker`.
+- The `shell` description steers the model to the file tools for reading, finding, and
+  changing files; it is a nudge, not enforced.
 - Each shell command has a fixed 10-minute timeout. A timed-out command is killed and
   reported to the model as a tool error; the run continues.
 - Tool input is checked strictly; unknown fields are an error. The schemas are fixed in

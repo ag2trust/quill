@@ -96,7 +96,7 @@ var (
 			"output_mode": map[string]any{"type": "string", "enum": []string{"content", "files"},
 				"description": "content (default) returns path:line: text for each match; files returns each matching file once."},
 		})}
-	defShell = definition{"shell", "Run a shell command in the workspace and return its combined output and exit status.",
+	defShell = definition{"shell", "Run a shell command in the workspace and return its combined output and exit status. Use it to build, test, and run programs. To read, find, or change files, use read, glob, search, edit, and write instead of shell commands such as cat, grep, sed, or scripts.",
 		obj([]string{"command"}, map[string]any{
 			"command": prop("string", "Command to run."),
 		})}
