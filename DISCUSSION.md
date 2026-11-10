@@ -48,9 +48,13 @@ Lookups, not discussions.
 4. Check `quill` for name collisions; the repo went public on 2026-11-08.
 5. Verified 2026-11-08 (live, Haiku 5.5): the API accepts consecutive user messages.
    `TestLiveResumeAfterInterrupted` cancelled a run mid-`shell`, resumed it, and completed.
-6. Does a high-effort step with `max_tokens` 32,000 finish within the 10-minute per-attempt
-   timeout without streaming? If not, consider streaming. Still open: the live suite runs at
-   low effort.
+6. Verified 2026-11-09 (live, one run): a high-effort `claude-opus-5-5` step that hit
+   `max_tokens` 32,000 finished in about 5.3 minutes without streaming, about half the
+   10-minute per-attempt timeout (about 100 output tokens per second across the run). The
+   cut-off tool call was not run, and the model retried in smaller steps. Output speed
+   varies with load, so streaming stays the fix if timeouts appear. The SDK estimates 15
+   minutes for 32,000 tokens and refuses non-streaming requests over 10 minutes unless a
+   request timeout is set, as Quill does.
 7. After an empty `end_turn` or a `refusal`, does resuming the session work? Quill saves
    neither turn, so the next request may hold two consecutive user messages. Item 5 shows
    the API accepts that shape; neither stop has been triggered live.
