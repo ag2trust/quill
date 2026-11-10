@@ -26,6 +26,7 @@ type Server struct {
 	mu       sync.Mutex
 	replies  []Reply
 	requests [][]byte
+	headers  []http.Header
 }
 
 const exhaustedBody = `{"type":"error","error":{"type":"api_error","message":"fakeapi: script exhausted"}}`
@@ -45,6 +46,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	s.requests = append(s.requests, body)
+	s.headers = append(s.headers, r.Header.Clone())
 	reply := Reply{Status: http.StatusInternalServerError, Body: exhaustedBody}
 	if len(s.replies) > 0 {
 		reply = s.replies[0]
@@ -78,6 +80,13 @@ func (s *Server) Requests() [][]byte {
 	out := make([][]byte, len(s.requests))
 	copy(out, s.requests)
 	return out
+}
+
+// Headers returns the request headers received so far, in order.
+func (s *Server) Headers() []http.Header {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]http.Header(nil), s.headers...)
 }
 
 // TextReply is a successful response with one text block and stop reason end_turn.

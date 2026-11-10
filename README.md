@@ -51,6 +51,24 @@ handling one prompt is a **run**.
 - Transient provider errors (rate limited, overloaded, network) are retried briefly inside
   the run with the SDK's retries, honouring `retry-after`, within `--timeout`. Longer waits and
   failover belong to the caller.
+- Context compaction (2026-11-10) is always on, using the API's server-side threshold
+  compaction, a beta (`compact-2026-01-12`). The trigger is fixed at 150,000 input tokens,
+  the API default; there is no flag. When it fires, the reply starts with a `compaction`
+  block holding a summary, and the API ignores everything before the latest such block.
+  Quill's history stays append-only and is still replayed byte-for-byte, so the session
+  file format is unchanged. The compaction call is billed separately from the reply's
+  top-level usage; Quill adds it to the run's usage and to the `--max-tokens` count.
+  - It needs a model that supports the beta. The API docs list Claude Fable 5 to 5.2,
+    Mythos 5 to 5.2 and Mythos Preview, Opus 4.6 to 4.8, 5 and 5.5, Sonnet 4.6, 5 and 5.5,
+    and Haiku 5.5. Other models, and gateways without the beta, are expected to fail every
+    request with `bad_request`; this is unverified.
+  - Each compaction rewrites the cached prefix, so the next request writes the cache anew.
+  - The summary prompt is Quill's own, not the API default: it asks for the goal,
+    decisions, files changed, current state, and next steps, and says not to call tools.
+    The API docs say that with tools in the request the summariser may call a tool
+    instead, and then no summary comes back and nothing is compacted. They also say
+    that with custom instructions the summariser sees only the visible conversation, not
+    earlier thinking.
 
 ### Command line (2026-11-07, limit defaults 2026-11-08, `--tools` 2026-11-10)
 
@@ -256,7 +274,7 @@ damage, the agent stops instead of guessing.
 
 - One autonomous coding task per run, in a git workspace, using the tools above.
 - Not in the first version: MCP client, skills, a no-tools mode, structured JSON output,
-  context compaction, cost in USD, and other providers.
+  cost in USD, and other providers.
 - Out of scope entirely: plugins, subagents, web search, image input, memory between
   sessions, and orchestration. Orchestration belongs to the caller.
 

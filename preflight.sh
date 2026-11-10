@@ -7,7 +7,7 @@
 #   2. secrets     — no credential-shaped strings in the tree or unpublished commits
 #                    (this repo is public)
 #   3. gofmt       — no unformatted files
-#   4. go vet      — ./...
+#   4. go vet      — ./..., then the live-tagged tests (compile check only; no key, no API call)
 #   5. go test     — ./... -count=1
 #   6. build       — CGO_ENABLED=0 for linux/amd64, linux/arm64, darwin/arm64
 #
@@ -116,6 +116,8 @@ gofmt_gate
 
 printf '=== preflight: go vet ===\n'
 go vet ./... || fail "go vet"
+# The live tests are behind a build tag, so nothing else compiles them.
+go vet -tags live ./tests/live/ || fail "go vet -tags live ./tests/live/"
 
 printf '=== preflight: go test ===\n'
 go test -count=1 ./... || fail "go test"

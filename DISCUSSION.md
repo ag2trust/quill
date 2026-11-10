@@ -58,3 +58,28 @@ Lookups, not discussions.
    the API accepts that shape; neither stop has been triggered live.
 8. Verified 2026-11-08 (live): automatic prompt caching produces cache reads (about 9,800
    tokens read on the second step of `TestLiveCacheReads`).
+9. Verified 2026-11-10 (live, one run, Haiku 5.5, high effort, trigger lowered to the
+   50,000 minimum): `TestLiveCompaction` compacted twice in a 15-step run and completed.
+   Threshold compaction worked on non-streaming requests with client tools, and the full
+   history, thinking blocks after the compaction block included, was accepted on every
+   later request without the thinking-binding beta. The compaction iteration reports its
+   own cache reads and writes as well as input and output. Compaction is a beta API and
+   this is one run on one model. The run used the API's default summary prompt.
+   A second run the same day (one run, same settings, with Quill's own `instructions`)
+   also completed in 15 steps with two compactions and a summary present. In every reply
+   of that run each of the four top-level usage fields, cache fields included, equalled
+   the sum of the `message` iterations, so adding the compaction iteration does not count
+   anything twice. The docs state this only for input and output tokens.
+10. Compaction, open and unverified:
+    - Observation, cause unverified: the first summarising call read far less from the
+      cache with Quill's instructions (about 2,500 tokens read, 55,600 written) than with
+      the default prompt (about 47,300 read, 11,100 written). One run each.
+    - Models or gateways without the beta are expected to fail with `bad_request`; not
+      tried.
+    - A compaction block with `content: null` (no summary, documented when tools are
+      present) has not been seen live. Quill keeps and replays it; the docs say the API
+      ignores it and nothing is compacted, so context keeps growing until a later
+      compaction succeeds.
+    - Compaction on a resumed session has not been run live.
+    - The session file and the request body are never trimmed, so both grow without bound
+      in a long session, and the request will eventually hit the API's request size limit.

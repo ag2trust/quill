@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go/v2/option"
@@ -54,7 +55,7 @@ func TestStepSendsCacheAndRawHistory(t *testing.T) {
 	body := reqs[0]
 
 	counts := topLevelKeys(t, body)
-	for _, k := range []string{"messages", "system", "tools", "output_config", "cache_control", "max_tokens", "model"} {
+	for _, k := range []string{"messages", "system", "tools", "output_config", "context_management", "cache_control", "max_tokens", "model"} {
 		if counts[k] != 1 {
 			t.Errorf("key %q appears %d times at top level", k, counts[k])
 		}
@@ -188,6 +189,95 @@ func TestRetriesTransient(t *testing.T) {
 		if !bytes.Equal(reqs[i], reqs[0]) {
 			t.Errorf("retry %d body differs:\n%s\n%s", i, reqs[i], reqs[0])
 		}
+	}
+}
+
+func TestStepRequestsCompaction(t *testing.T) {
+	srv := fakeapi.New(t, fakeapi.TextReply("ok", events.Usage{}), fakeapi.TextReply("ok", events.Usage{}))
+	c := newClient(t, srv.URL())
+	if _, err := c.Step(context.Background(), simpleRequest()); err != nil {
+		t.Fatal(err)
+	}
+	c.CompactTrigger = 50000
+	if _, err := c.Step(context.Background(), simpleRequest()); err != nil {
+		t.Fatal(err)
+	}
+	reqs, hdrs := srv.Requests(), srv.Headers()
+	for i, want := range []string{"150000", "50000"} {
+		if got := hdrs[i].Values("Anthropic-Beta"); len(got) != 1 || got[0] != "compact-2026-01-12" {
+			t.Errorf("request %d anthropic-beta = %q", i, got)
+		}
+		if n := topLevelKeys(t, reqs[i])["context_management"]; n != 1 {
+			t.Fatalf("request %d: context_management appears %d times", i, n)
+		}
+		var top map[string]json.RawMessage
+		if err := json.Unmarshal(reqs[i], &top); err != nil {
+			t.Fatal(err)
+		}
+		var cm struct {
+			Edits []struct {
+				Type    string `json:"type"`
+				Trigger struct {
+					Type  string      `json:"type"`
+					Value json.Number `json:"value"`
+				} `json:"trigger"`
+				Instructions string `json:"instructions"`
+			} `json:"edits"`
+		}
+		if err := json.Unmarshal(top["context_management"], &cm); err != nil || len(cm.Edits) != 1 {
+			t.Fatalf("request %d context_management = %s (%v)", i, top["context_management"], err)
+		}
+		e := cm.Edits[0]
+		if e.Type != "compact_20260112" || e.Trigger.Type != "input_tokens" || e.Trigger.Value.String() != want {
+			t.Errorf("request %d context_management = %s", i, top["context_management"])
+		}
+		if e.Instructions != compactInstructions || !strings.Contains(e.Instructions, "Do not call any tools") ||
+			!strings.Contains(e.Instructions, "<summary></summary>") {
+			t.Errorf("request %d instructions = %q", i, e.Instructions)
+		}
+	}
+}
+
+// A reply that compacted starts with a compaction block and reports the
+// compaction call only under usage.iterations.
+func TestStepCompactionReply(t *testing.T) {
+	content := `[{"type":"compaction","content":"Summary: <did> a & b","signature":"sig==","encrypted_content":"enc","future_field":{"a": 1}},` +
+		`{"type":"thinking","thinking":"next","signature":"t=="},{"type":"tool_use","id":"toolu_1","name":"shell","input":{"command": "ls"}}]`
+	srv := fakeapi.New(t, fakeapi.Reply{Body: `{"id":"msg_1","type":"message","role":"assistant","model":"m","content":` +
+		content + `,"stop_reason":"tool_use","usage":{"input_tokens":23000,"output_tokens":1000,` +
+		`"cache_read_input_tokens":5,"cache_creation_input_tokens":7,"iterations":[` +
+		`{"type":"compaction","input_tokens":180000,"output_tokens":3500,"cache_read_input_tokens":11,"cache_creation_input_tokens":13},` +
+		`{"type":"message","input_tokens":23000,"output_tokens":1000,"cache_read_input_tokens":5,"cache_creation_input_tokens":7}]}}`},
+		fakeapi.TextReply("done", events.Usage{}))
+	c := newClient(t, srv.URL())
+	req := simpleRequest()
+	resp, err := c.Step(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantMsg := `{"role":"assistant","content":` + content + `}`
+	if string(resp.Message) != wantMsg {
+		t.Fatalf("message:\n got %s\nwant %s", resp.Message, wantMsg)
+	}
+	if len(resp.ToolUses) != 1 || resp.ToolUses[0].ID != "toolu_1" || resp.Text != "" {
+		t.Errorf("tool uses %+v, text %q", resp.ToolUses, resp.Text)
+	}
+	if want := (events.Usage{Input: 203000, Output: 4500, CacheRead: 16, CacheWrite: 20}); resp.Usage != want {
+		t.Errorf("usage %+v, want %+v", resp.Usage, want)
+	}
+
+	// Replay: the whole history, compaction block included, goes back verbatim.
+	result := `{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"a.txt"}]}`
+	req.Messages = append(req.Messages, resp.Message, json.RawMessage(result))
+	if _, err := c.Step(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(srv.Requests()[1], &top); err != nil {
+		t.Fatal(err)
+	}
+	if want := `[{"role":"user","content":"hi"},` + wantMsg + `,` + result + `]`; string(top["messages"]) != want {
+		t.Fatalf("replayed messages:\n got %s\nwant %s", top["messages"], want)
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/v2"
 
 	"quill/internal/events"
+	"quill/internal/fakeapi"
 	"quill/internal/provider"
 	"quill/internal/tools"
 )
@@ -681,4 +682,40 @@ func TestResumeCountsThisRunOnly(t *testing.T) {
 	sameMsgs(t, c.reqs[0].Messages, append(append([]json.RawMessage(nil), prior...), next))
 	// Only this run's messages go to the store; earlier ones are already saved.
 	sameMsgs(t, h.store.msgs, []json.RawMessage{next, h.loop.History[3]})
+}
+
+// A compaction that produced no summary comes back as a compaction block with
+// null content. The API ignores such a block, so Quill keeps it like any other:
+// stored and replayed verbatim, and the run goes on.
+func TestNullCompactionBlockKeptAndRunContinues(t *testing.T) {
+	content := `[{"type":"compaction","content":null},{"type":"tool_use","id":"t1","name":"write","input":{"path":"a.txt","content":"hi"}}]`
+	srv := fakeapi.New(t, fakeapi.Reply{Body: `{"id":"msg_1","type":"message","role":"assistant","model":"m","content":` +
+		content + `,"stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":5,"iterations":[` +
+		`{"type":"compaction","input_tokens":7,"output_tokens":3},{"type":"message","input_tokens":10,"output_tokens":5}]}}`},
+		fakeapi.TextReply("done", events.Usage{Input: 1, Output: 1}))
+	t.Setenv("ANTHROPIC_BASE_URL", srv.URL())
+	h := newHarness(t, provider.NewClaude("test-key"), nil)
+	res := h.loop.Run(context.Background(), context.Background(), firstMsg)
+
+	if res.Status != events.StatusCompleted || res.FinalText != "done" || res.Steps != 2 {
+		t.Fatalf("result %+v", res)
+	}
+	// The failed compaction call is still billed.
+	if want := (events.Usage{Input: 18, Output: 9}); res.Usage != want {
+		t.Errorf("usage %+v, want %+v", res.Usage, want)
+	}
+	if b, err := os.ReadFile(filepath.Join(h.ws, "a.txt")); err != nil || string(b) != "hi" {
+		t.Fatalf("file %q %v", b, err)
+	}
+	wantMsg := `{"role":"assistant","content":` + content + `}`
+	if len(h.store.msgs) != 4 || string(h.store.msgs[1]) != wantMsg {
+		t.Fatalf("stored messages %s", h.store.msgs)
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(srv.Requests()[1], &top); err != nil {
+		t.Fatal(err)
+	}
+	if want := "[" + string(firstMsg) + "," + wantMsg + "," + string(h.store.msgs[2]) + "]"; string(top["messages"]) != want {
+		t.Fatalf("replayed messages:\n got %s\nwant %s", top["messages"], want)
+	}
 }
