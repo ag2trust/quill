@@ -68,6 +68,13 @@ func TestUsageErrors(t *testing.T) {
 		{"bad tools", []string{"exec", "--tools", "none", "x"}, "", keyEnv},
 		{"removed sandbox flag", []string{"exec", "--sandbox", "read-only", "x"}, "", keyEnv},
 		{"env api key", []string{"exec", "--env", "ANTHROPIC_API_KEY", "x"}, "", keyEnv},
+		{"env mcp token", []string{"exec", "--env", "QUILL_MCP_TOKEN", "x"}, "", keyEnv},
+		{"mcp url not http", []string{"exec", "--mcp-url", "stdio://server", "x"}, "", keyEnv},
+		{"mcp url without scheme", []string{"exec", "--mcp-url", "example.com/mcp", "x"}, "", keyEnv},
+		{"mcp url without host", []string{"exec", "--mcp-url", "http:///mcp", "x"}, "", keyEnv},
+		{"mcp url with credentials", []string{"exec", "--mcp-url", "https://u:p@example.com/mcp", "x"}, "", keyEnv},
+		{"mcp token with newline", []string{"exec", "--mcp-url", "https://example.com/mcp", "x"}, "",
+			env(map[string]string{"ANTHROPIC_API_KEY": "k", "QUILL_MCP_TOKEN": "a\nb"})},
 		{"bad env name", []string{"exec", "--env", "1BAD", "x"}, "", keyEnv},
 		{"missing key", []string{"exec", "x"}, "", env(nil)},
 		{"unknown flag", []string{"exec", "--nope", "x"}, "", keyEnv},
@@ -125,5 +132,18 @@ func TestEnvErrorDoesNotEchoValue(t *testing.T) {
 	_, err := Parse([]string{"exec", "--env", "1BAD=topsecret", "x"}, strings.NewReader(""), keyEnv)
 	if err == nil || strings.Contains(err.Error(), "topsecret") {
 		t.Fatalf("error leaks value: %v", err)
+	}
+}
+
+func TestMCPURLAndToken(t *testing.T) {
+	vars := env(map[string]string{"ANTHROPIC_API_KEY": "k", "QUILL_MCP_TOKEN": "tok"})
+	c, err := Parse([]string{"exec", "--mcp-url", "https://example.com/mcp", "x"}, strings.NewReader(""), vars)
+	if err != nil || c.MCPURL != "https://example.com/mcp" || c.MCPToken != "tok" {
+		t.Errorf("config = %q, %q, %v", c.MCPURL, c.MCPToken, err)
+	}
+	// Without --mcp-url the token is not read.
+	c, err = Parse([]string{"exec", "x"}, strings.NewReader(""), vars)
+	if err != nil || c.MCPURL != "" || c.MCPToken != "" {
+		t.Errorf("config = %q, %q, %v", c.MCPURL, c.MCPToken, err)
 	}
 }

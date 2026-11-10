@@ -5,11 +5,12 @@ var baseEnv = []string{"PATH", "HOME", "USER", "LANG"}
 
 // BuildEnv returns a clean tool environment: PATH, HOME, USER and LANG when
 // set, TMPDIR=tmpdir, then each variable in names that is set. Duplicates are
-// dropped, and ANTHROPIC_API_KEY is never included, even when named. passed
-// lists, once each and never nil, the names in names whose value was copied:
-// unset or empty variables, ANTHROPIC_API_KEY and TMPDIR are left out.
+// dropped, and ANTHROPIC_API_KEY and QUILL_MCP_TOKEN are never included, even
+// when named. passed lists, once each and never nil, the names in names whose
+// value was copied: unset or empty variables, those two and TMPDIR are left
+// out.
 func BuildEnv(getenv func(string) string, names []string, tmpdir string) (env, passed []string) {
-	seen := map[string]bool{"ANTHROPIC_API_KEY": true, "TMPDIR": true}
+	seen := map[string]bool{"ANTHROPIC_API_KEY": true, "QUILL_MCP_TOKEN": true, "TMPDIR": true}
 	added := map[string]bool{}
 	add := func(name string) {
 		if seen[name] {

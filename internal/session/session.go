@@ -55,12 +55,25 @@ type File struct {
 // Open creates the file with header h if missing, or loads it (ignoring h).
 // The file stays locked until Close.
 func Open(path string, h Header) (*File, bool, error) {
+	return OpenWith(path, func() (Header, error) { return h, nil })
+}
+
+// OpenWith is Open with the header built by header, which is called only
+// when the file is created. If it fails, the file is removed and its error
+// returned.
+func OpenWith(path string, header func() (Header, error)) (*File, bool, error) {
 	// O_EXCL fails on any existing path, including a dangling symlink.
 	fd, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
 		sf := &File{f: fd}
 		if err := lock(fd); err != nil {
 			fd.Close()
+			return nil, false, err
+		}
+		h, err := header()
+		if err != nil {
+			fd.Close()
+			os.Remove(path) // best effort: never leave a headerless file
 			return nil, false, err
 		}
 		h.Type, h.Format = "session", Format

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // Profile selects which tools are exposed.
@@ -31,12 +32,22 @@ type Shell interface {
 	Run(ctx context.Context, command string) Result
 }
 
+// RemotePrefix starts the name of every tool served by a Remote.
+const RemotePrefix = "mcp__"
+
+// Remote runs the tools the caller's MCP server provides.
+type Remote interface {
+	Call(ctx context.Context, name string, input json.RawMessage) Result
+}
+
 // Registry dispatches tool calls for one profile and workspace.
 type Registry struct {
 	workspace string
 	shell     Shell
 	defs      json.RawMessage
 	allowed   map[string]bool
+	remote    Remote
+	remotes   map[string]bool
 }
 
 type schema struct {
@@ -131,6 +142,42 @@ func NewRegistry(profile Profile, workspace string, shell Shell) *Registry {
 // Definitions returns the tool definitions as a JSON array, byte-identical across calls.
 func (r *Registry) Definitions() json.RawMessage { return append(json.RawMessage(nil), r.defs...) }
 
+// SetRemote sends calls to the tools in names, and only those, to remote.
+func (r *Registry) SetRemote(remote Remote, names []string) {
+	r.remote, r.remotes = remote, map[string]bool{}
+	for _, n := range names {
+		r.remotes[n] = true
+	}
+}
+
+// AppendDefinitions returns the JSON array defs with extra appended, leaving
+// the bytes of both unchanged.
+func AppendDefinitions(defs json.RawMessage, extra []json.RawMessage) json.RawMessage {
+	out := append(json.RawMessage(nil), bytes.TrimSuffix(defs, []byte("]"))...)
+	for _, e := range extra {
+		out = append(append(out, ','), e...)
+	}
+	return append(out, ']')
+}
+
+// RemoteNames returns the names in the JSON array defs that start with
+// RemotePrefix, in order and never nil.
+func RemoteNames(defs json.RawMessage) ([]string, error) {
+	var list []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(defs, &list); err != nil {
+		return nil, err
+	}
+	names := []string{}
+	for _, d := range list {
+		if strings.HasPrefix(d.Name, RemotePrefix) {
+			names = append(names, d.Name)
+		}
+	}
+	return names, nil
+}
+
 // Run executes a tool call. All content is capped at OutputCap.
 func (r *Registry) Run(ctx context.Context, name string, input json.RawMessage) Result {
 	res := r.dispatch(ctx, name, input)
@@ -143,6 +190,9 @@ func errResult(format string, a ...any) Result {
 }
 
 func (r *Registry) dispatch(ctx context.Context, name string, input json.RawMessage) Result {
+	if r.remotes[name] {
+		return r.remote.Call(ctx, name, input)
+	}
 	if !r.allowed[name] {
 		return errResult("unknown tool: %s", name)
 	}

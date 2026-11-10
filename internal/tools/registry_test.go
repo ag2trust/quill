@@ -150,3 +150,53 @@ func TestDefinitionsGolden(t *testing.T) {
 		}
 	}
 }
+
+func TestAppendDefinitionsAndRemoteNames(t *testing.T) {
+	base := NewRegistry(ReadOnly, "/x", nil).Definitions()
+	before := string(base)
+	extra := []json.RawMessage{json.RawMessage(`{"name":"mcp__a","input_schema":{"type":"object"}}`), json.RawMessage(`{"name":"mcp__b"}`)}
+	all := AppendDefinitions(base, extra)
+	if string(base) != before {
+		t.Fatal("AppendDefinitions changed its input")
+	}
+	want := before[:len(before)-1] + "," + string(extra[0]) + "," + string(extra[1]) + "]"
+	if string(all) != want {
+		t.Errorf("got %s", all)
+	}
+	if !json.Valid(all) {
+		t.Errorf("not valid JSON: %s", all)
+	}
+	remote, err := RemoteNames(all)
+	if err != nil || len(remote) != 2 || remote[0] != "mcp__a" || remote[1] != "mcp__b" {
+		t.Errorf("RemoteNames = %v, %v", remote, err)
+	}
+	if remote, err := RemoteNames(base); err != nil || remote == nil || len(remote) != 0 {
+		t.Errorf("RemoteNames(built-ins) = %v, %v", remote, err)
+	}
+	if _, err := RemoteNames(json.RawMessage(`{"not":"an array"}`)); err == nil {
+		t.Error("RemoteNames accepted a non-array")
+	}
+}
+
+type fakeRemote struct{ got string }
+
+func (f *fakeRemote) Call(_ context.Context, name string, input json.RawMessage) Result {
+	f.got = name + " " + string(input)
+	return Result{Content: "remote"}
+}
+
+func TestRemoteDispatch(t *testing.T) {
+	// Without a remote, and for names it was not given, mcp__ tools are unknown.
+	r := NewRegistry(ReadOnly, t.TempDir(), nil)
+	if res := r.Run(context.Background(), "mcp__a", json.RawMessage(`{}`)); !res.IsError || res.Content != "unknown tool: mcp__a" {
+		t.Errorf("no remote: %+v", res)
+	}
+	f := &fakeRemote{}
+	r.SetRemote(f, []string{"mcp__a"})
+	if res := r.Run(context.Background(), "mcp__a", json.RawMessage(`{"k":1}`)); res.IsError || res.Content != "remote" || f.got != `mcp__a {"k":1}` {
+		t.Errorf("remote call: %+v, got %q", res, f.got)
+	}
+	if res := r.Run(context.Background(), "mcp__b", json.RawMessage(`{}`)); !res.IsError {
+		t.Errorf("unlisted remote tool ran: %+v", res)
+	}
+}

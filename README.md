@@ -70,6 +70,7 @@ echo "$TASK" | quill exec [flags] -
 | `--max-steps N`, `--max-tokens N`, `--timeout D` | Hard limits for the run. `--max-tokens` counts input, output, and cache-write tokens, not cache reads. | `100`, `2000000`, `30m` |
 | `--session FILE` | Session file to create or continue. See Sessions. | none |
 | `--env NAME` | Pass this environment variable to tools. Repeatable. | none |
+| `--mcp-url URL` | MCP server whose tools the model also gets (2026-11-10). See MCP. | none |
 
 - The API key comes only from `ANTHROPIC_API_KEY`, never from a flag.
 - `--tools` (2026-11-10, replacing `--sandbox read-only|workspace-write`) only selects which
@@ -173,7 +174,7 @@ damage, the agent stops instead of guessing.
 
 - Tools start from a clean environment: `PATH`, `HOME`, `USER`, `LANG`, `TMPDIR`, plus each
   variable named with `--env`. Quill copies the value from its own environment.
-- `--env ANTHROPIC_API_KEY` is refused.
+- `--env ANTHROPIC_API_KEY` is refused. So is `--env QUILL_MCP_TOKEN` (2026-11-10, see MCP).
 - `run.started` lists the names passed, so a missing variable is easy to spot. Unset or
   empty variables are not passed and are missing from `env_passed`.
 - This stops accidental leaks only. A same-user tool can still read the key from Quill's
@@ -188,6 +189,57 @@ damage, the agent stops instead of guessing.
 - Quill needs no change for this; it already honours `ANTHROPIC_BASE_URL`. The proxy is the
   caller's component and is not part of this repository.
 - Without such a proxy, the real key is in Quill's process and same-user tools can read it.
+
+### MCP (2026-11-10)
+
+A caller can give the model extra tools from one MCP server that the caller configures.
+
+- `--mcp-url URL` names the server: `http` or `https`, with no credentials in the URL.
+  Without the flag Quill does not use MCP. Quill reads no MCP configuration from the
+  workspace or any file.
+- Only tools over the Streamable HTTP transport are supported. There are no stdio servers,
+  resources, prompts, sampling, elicitation, or OAuth. Quill uses the official Go SDK,
+  `github.com/modelcontextprotocol/go-sdk`, pinned in `go.mod`.
+- An optional token comes only from the environment variable `QUILL_MCP_TOKEN`, never from
+  a flag or a file. Quill sends it as `Authorization: Bearer <token>` on every request to
+  the server and does not follow redirects. Over plain `http` it travels unencrypted.
+- The token is not passed to tools and Quill does not write it to stderr, the events, or
+  the session file. Quill's own error messages leave out the URL and the token.
+- A new session connects, lists the server's tools once, and offers each as a tool named
+  `mcp__<name>` with the server's description and input schema. They are sorted by name
+  and appended after the built-in tools in the session header, so the tool list is fixed
+  for the session and the prompt cache stays valid. Later changes on the server are not
+  seen.
+- Both tool profiles get the MCP tools. `--tools read-only` removes Quill's own write,
+  edit, and shell tools; it says nothing about what an MCP tool does.
+- Listing fails closed. Every `mcp__<name>` must match `^[a-zA-Z0-9_-]{1,64}$` and be
+  unique, and every input schema must be an object schema. The limits are 64 tools and
+  100,000 bytes for all MCP tool definitions together. A server with no tools is also a
+  failure.
+- Continuing a session uses the stored tools and never lists again. The URL is not stored
+  and may differ between runs; Quill connects to it at the start of each run. Continuing
+  a session that has MCP tools without `--mcp-url`, or giving `--mcp-url` for a session
+  that has none, is bad usage (exit 2).
+- A call sends `tools/call` with the model's arguments as they are; the server validates
+  them, not Quill. The result's text blocks are joined with newlines, any other content
+  becomes `[non-text content omitted]`, and structured content is ignored. The server's
+  `isError` makes it a tool error. The output is truncated like any tool output.
+- A failed call is a tool error the model sees, and the run continues: a transport
+  failure, a JSON-RPC error, or a server asking for input. After a transport failure the
+  next call opens a new connection.
+- Each call has a fixed 10-minute timeout. On a timeout or when the run stops, Quill stops
+  waiting and sends the MCP cancellation; whether the server stops its work is up to the
+  server.
+- If the server cannot be used at the start (unreachable, rejected, list failed, or tools
+  that fail the checks above), the model is not called and the run ends with status
+  `mcp_error`, exit 6, and `error.kind` `mcp_unavailable`, with `message` and, when the
+  server answered with an HTTP error, `http_status`. Connecting and listing have 30
+  seconds. A new session file is not created.
+- Security position. The server and its tool names, descriptions, and schemas are trusted,
+  because the caller configured the server; they go to the model as tool definitions.
+  Tool results are not trusted: they are untrusted content like any tool output. The token
+  is in Quill's process, so a same-user tool can read it, exactly like the API key. The
+  caller should make it per-run and narrowly scoped.
 
 ### Cleanup and stopping (2026-11-07)
 
@@ -212,6 +264,9 @@ damage, the agent stops instead of guessing.
 - `run.started` carries `format` (currently 2), raised on an incompatible change to the
   events, alongside `version` (the Quill build). Format 2 (2026-11-10) renamed the
   `sandbox` field of `run.started` to `tool_profile`.
+- `run.started` lists the session's MCP tool names in `mcp_tools` (2026-11-10), empty
+  without MCP. The field and the `mcp_error` status below were added without raising
+  `format`.
 - Exactly one `run.completed`, always the last line, except after SIGKILL. No `run.completed`
   means Quill crashed, except exit 2, which reports on stderr only. A Go runtime crash also
   exits 2, but normally after `run.started`, so stdout is non-empty and has no
@@ -236,6 +291,7 @@ damage, the agent stops instead of guessing.
 | 3 | `limit_reached` | Steps, tokens, or time ran out |
 | 4 | `provider_error` | See `error.kind` |
 | 5 | `blocked` | Waiting for input. See `blocker` |
+| 6 | `mcp_error` | The MCP server could not be used at the start. See MCP |
 | 143 | `cancelled` | Stopped by SIGTERM, SIGINT or SIGHUP |
 
 - Provider errors are classified from HTTP status and API error type only, never from text.
@@ -255,7 +311,7 @@ damage, the agent stops instead of guessing.
 ### First version scope (2026-11-07)
 
 - One autonomous coding task per run, in a git workspace, using the tools above.
-- Not in the first version: MCP client, skills, a no-tools mode, structured JSON output,
+- Not in the first version: skills, a no-tools mode, structured JSON output,
   context compaction, cost in USD, and other providers.
 - Out of scope entirely: plugins, subagents, web search, image input, memory between
   sessions, and orchestration. Orchestration belongs to the caller.

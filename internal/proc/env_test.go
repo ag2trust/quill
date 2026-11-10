@@ -10,10 +10,11 @@ func TestBuildEnv(t *testing.T) {
 		"PATH":              "/usr/bin:/bin",
 		"SECRET":            "x",
 		"ANTHROPIC_API_KEY": "k",
+		"QUILL_MCP_TOKEN":   "t",
 		"CALLER_X":          "1",
 	}
 	getenv := func(k string) string { return vars[k] }
-	env, passed := BuildEnv(getenv, []string{"CALLER_X", "ANTHROPIC_API_KEY"}, "/tmp/run")
+	env, passed := BuildEnv(getenv, []string{"CALLER_X", "ANTHROPIC_API_KEY", "QUILL_MCP_TOKEN"}, "/tmp/run")
 	want := []string{"PATH=/usr/bin:/bin", "TMPDIR=/tmp/run", "CALLER_X=1"}
 	if !slices.Equal(env, want) {
 		t.Fatalf("env = %q, want %q", env, want)

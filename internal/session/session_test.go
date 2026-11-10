@@ -264,3 +264,25 @@ func TestAppendFailureMarksBroken(t *testing.T) {
 		t.Fatal("want broken error and no recorded message")
 	}
 }
+
+func TestOpenWithHeaderFailureLeavesNoFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "s.jsonl")
+	boom := errors.New("boom")
+	if _, _, err := OpenWith(p, func() (Header, error) { return Header{}, boom }); !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want boom", err)
+	}
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Fatalf("file left behind (stat err %v)", err)
+	}
+	// The header function is not called for an existing file.
+	if f, _, err := Open(p, testHeader()); err != nil {
+		t.Fatal(err)
+	} else {
+		f.Close()
+	}
+	f, created, err := OpenWith(p, func() (Header, error) { t.Error("header called"); return Header{}, nil })
+	if err != nil || created {
+		t.Fatalf("created = %v, err = %v", created, err)
+	}
+	f.Close()
+}

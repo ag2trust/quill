@@ -23,7 +23,8 @@ Claude only for now (decided). Remaining:
 ## 3. Scope
 
 1. What does the built-in system prompt say, beyond the safety rules and precedence order?
-2. When do MCP, structured output, and a no-tools mode come in?
+2. When do structured output and a no-tools mode come in? (A minimal MCP client was decided
+   2026-11-10.)
 
 ## 4. Safety
 
