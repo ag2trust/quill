@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/url"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -332,5 +336,188 @@ func TestRenderInputRequired(t *testing.T) {
 	}
 	if r := render(&res); !r.IsError || !strings.Contains(r.Content, "asked for input") {
 		t.Errorf("render = %+v", r)
+	}
+}
+
+// hostPort is the address part of the server URL.
+func hostPort(srv *fakemcp.Server) string { return strings.TrimPrefix(srv.URL(), "http://") }
+
+// A server cannot make Quill hold a huge response: the body of every
+// response is capped, whatever carries it.
+func TestResponseTooLarge(t *testing.T) {
+	huge := strings.Repeat("x", MaxResponseBytes+1<<20)
+	hugeTool := fakemcp.Tool{Name: "huge", Call: func(context.Context, json.RawMessage) (*sdk.CallToolResult, error) {
+		return fakemcp.Text(huge), nil
+	}}
+	for name, start := range map[string]func(*testing.T, ...fakemcp.Tool) *fakemcp.Server{"sse": fakemcp.New, "json": fakemcp.NewJSON} {
+		t.Run(name+" call", func(t *testing.T) {
+			c := newClient(t, start(t, hugeTool, fakemcp.Tool{Name: "echo"}), "")
+			r := c.Call(context.Background(), "mcp__huge", json.RawMessage(`{}`))
+			if !r.IsError || len(r.Content) > 1000 || !strings.Contains(r.Content, "exceed") {
+				t.Errorf("huge: error %v, %d bytes: %.200s", r.IsError, len(r.Content), r.Content)
+			}
+			if r := c.Call(context.Background(), "mcp__echo", json.RawMessage(`{}`)); r.IsError {
+				t.Errorf("echo afterwards = %+v", r)
+			}
+		})
+		t.Run(name+" list", func(t *testing.T) {
+			srv := start(t, fakemcp.Tool{Name: "a", Description: huge})
+			_, err := newClient(t, srv, "").List(context.Background())
+			if e := startError(t, err); !strings.Contains(e.Message, "response exceeds") && !strings.Contains(e.Message, "exceeded") {
+				t.Errorf("message = %.300q", e.Message)
+			}
+		})
+	}
+	t.Run("error status", func(t *testing.T) {
+		srv := fakemcp.New(t, fakemcp.Tool{Name: "a"})
+		srv.SetFailure(401, huge)
+		_, err := newClient(t, srv, "").List(context.Background())
+		if e := startError(t, err); e.HTTPStatus != 401 || !strings.Contains(e.Message, "response exceeds") {
+			t.Errorf("error = %d %.300q", e.HTTPStatus, e.Message)
+		}
+	})
+}
+
+func TestLimitedBody(t *testing.T) {
+	c := New("http://example.invalid/mcp", "", "test")
+	read := func(n int) (int, error) {
+		b := &limitedBody{c: c, rc: io.NopCloser(strings.NewReader(strings.Repeat("x", n))), left: MaxResponseBytes + 1}
+		got, err := io.Copy(io.Discard, b)
+		return int(got), err
+	}
+	if n, err := read(MaxResponseBytes); err != nil || n != MaxResponseBytes {
+		t.Errorf("at the limit: %d, %v", n, err)
+	}
+	if n, err := read(MaxResponseBytes + 1); !errors.Is(err, errTooLarge) || n > MaxResponseBytes+1 {
+		t.Errorf("over the limit: %d, %v", n, err)
+	}
+}
+
+// A restarted server answers the old session with 404 and a JSON-RPC error
+// body. That costs one call; the next one opens a new session.
+func TestReconnectAfterServerRestart(t *testing.T) {
+	srv := fakemcp.New(t, fakemcp.Tool{Name: "echo"})
+	c := newClient(t, srv, "")
+	ctx := context.Background()
+	if r := c.Call(ctx, "mcp__echo", json.RawMessage(`{}`)); r.IsError {
+		t.Fatalf("first call = %+v", r)
+	}
+	srv.Restart()
+	if r := c.Call(ctx, "mcp__echo", json.RawMessage(`{}`)); !r.IsError {
+		t.Fatalf("call for the lost session = %+v", r)
+	}
+	if r := c.Call(ctx, "mcp__echo", json.RawMessage(`{}`)); r.IsError {
+		t.Errorf("call after the restart = %+v", r)
+	}
+}
+
+// Start-failure text can come from the server: it is capped and has no
+// control characters or token.
+func TestStartErrorTextIsCappedAndClean(t *testing.T) {
+	srv := fakemcp.New(t, fakemcp.Tool{Name: "a"})
+	msg := "denied \x1b[31m " + testToken + " \a\n" + strings.Repeat("y", 200000)
+	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "error": map[string]any{"code": -32000, "message": msg}})
+	srv.SetFailure(401, string(body))
+	for name, err := range map[string]error{
+		"connect": New(srv.URL(), testToken, "test").Connect(context.Background()),
+		"list":    func() error { _, err := New(srv.URL(), testToken, "test").List(context.Background()); return err }(),
+	} {
+		e := startError(t, err)
+		if e.HTTPStatus != 401 || !strings.Contains(e.Message, "denied") {
+			t.Errorf("%s: error = %d %.200q", name, e.HTTPStatus, e.Message)
+		}
+		if len(e.Message) > maxErrorBytes+50 {
+			t.Errorf("%s: message has %d bytes", name, len(e.Message))
+		}
+		if strings.ContainsFunc(e.Message, func(r rune) bool { return r < 0x20 || r == 0x7f }) || strings.Contains(e.Message, testToken) {
+			t.Errorf("%s: message has control characters or the token: %.200q", name, e.Message)
+		}
+	}
+	// Tool names in start errors come from the server too.
+	_, err := definitions([]*sdk.Tool{{Name: "bad\x1b name " + strings.Repeat("z", 5000), InputSchema: map[string]any{"type": "object"}}})
+	if err == nil {
+		t.Fatal("accepted")
+	}
+	if m := New("http://example.invalid", "", "test").sanitize(err.Error()); len(m) > maxErrorBytes+50 {
+		t.Errorf("message has %d bytes", len(m))
+	}
+}
+
+// Network errors are described without the URL, host, IP or port.
+func TestErrorsCarryNoAddress(t *testing.T) {
+	srv := fakemcp.New(t, fakemcp.Tool{Name: "echo"})
+	connected := newClient(t, srv, "")
+	if err := connected.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	addr := hostPort(srv)
+	host, port, _ := net.SplitHostPort(addr)
+	srv.Close()
+	_, err := New(srv.URL(), "", "test").List(context.Background())
+	texts := map[string]string{
+		"start":                     startError(t, err).Message,
+		"call":                      New(srv.URL(), "", "test").Call(context.Background(), "mcp__echo", nil).Content,
+		"call on a lost connection": connected.Call(context.Background(), "mcp__echo", nil).Content,
+	}
+	for name, text := range texts {
+		if text == "" || strings.Contains(text, host) || strings.Contains(text, port) || strings.Contains(text, "http") {
+			t.Errorf("%s: %q", name, text)
+		}
+	}
+	if !strings.Contains(texts["start"], "connection refused") {
+		t.Errorf("start error does not name the cause: %q", texts["start"])
+	}
+
+	// Whatever the error text holds, only its kind is used.
+	dial := &net.OpError{Op: "dial", Net: "tcp", Addr: &net.TCPAddr{IP: net.IPv4(10, 1, 2, 3), Port: 8443}, Err: syscall.ECONNREFUSED}
+	for _, err := range []error{
+		&url.Error{Op: "Post", URL: "https://internal.example/mcp%20path", Err: dial},
+		fmt.Errorf("sending: %w", &url.Error{Op: "Post", URL: "https://internal.example/mcp", Err: &net.DNSError{Err: "no such host", Name: "internal.example", Server: "10.0.0.53:53"}}),
+		&url.Error{Op: "Post", URL: "https://internal.example/mcp", Err: errors.New("tls: bad certificate for internal.example")},
+		dial,
+	} {
+		got := New("https://internal.example/mcp", "", "test").describe(err)
+		for _, private := range []string{"internal", "example", "10.", "8443", "mcp", "53"} {
+			if strings.Contains(got, private) {
+				t.Errorf("describe(%v) = %q", err, got)
+			}
+		}
+	}
+}
+
+// A server that echoes the token back does not get it into a tool result.
+func TestTokenRedactedFromResults(t *testing.T) {
+	srv := fakemcp.New(t,
+		fakemcp.Tool{Name: "leak", Call: func(context.Context, json.RawMessage) (*sdk.CallToolResult, error) {
+			return fakemcp.Text("Authorization: Bearer " + testToken), nil
+		}},
+		fakemcp.Tool{Name: "leak_error", Call: func(context.Context, json.RawMessage) (*sdk.CallToolResult, error) {
+			return nil, errors.New("bad header " + testToken)
+		}},
+	)
+	c := newClient(t, srv, testToken)
+	for _, name := range []string{"mcp__leak", "mcp__leak_error"} {
+		r := c.Call(context.Background(), name, nil)
+		if strings.Contains(r.Content, testToken) || !strings.Contains(r.Content, "<token>") {
+			t.Errorf("%s = %+v", name, r)
+		}
+	}
+}
+
+// Connecting inside a call has the start limit, not the call's ten minutes.
+func TestCallConnectHasStartTimeout(t *testing.T) {
+	srv := fakemcp.New(t, fakemcp.Tool{Name: "echo"})
+	t.Cleanup(srv.Hang())
+	c := New(srv.URL(), "", "test")
+	// The SDK adds up to 5 s after a timed-out connect, for its cancellation
+	// notice to the server.
+	c.startTimeout, c.callTimeout = 200*time.Millisecond, 30*time.Second
+	start := time.Now()
+	r := c.Call(context.Background(), "mcp__echo", nil)
+	if !r.IsError || r.Content != "MCP call failed: connect: timed out" {
+		t.Errorf("call = %+v", r)
+	}
+	if d := time.Since(start); d > 15*time.Second {
+		t.Errorf("call took %s", d)
 	}
 }

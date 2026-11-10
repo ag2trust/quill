@@ -196,9 +196,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 		if errors.Is(err, session.ErrLocked) {
 			return usage("--session: %v", err)
 		}
-		if errors.Is(err, session.ErrEmpty) {
-			return usage("--session: session file is empty (an interrupted create); delete it if no run is using it")
-		}
 		if err != nil {
 			var syn *json.SyntaxError
 			if errors.As(err, &syn) {

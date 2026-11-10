@@ -235,8 +235,36 @@ func TestEmptyFile(t *testing.T) {
 	if err := os.WriteFile(p, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := Open(p, testHeader()); !errors.Is(err, ErrEmpty) {
-		t.Fatalf("want ErrEmpty, got %v", err)
+	// Zero bytes is an interrupted create: the session starts here.
+	f, created, err := Open(p, testHeader())
+	if err != nil || !created || f.Header.Model != testHeader().Model {
+		t.Fatalf("created = %v, err = %v", created, err)
+	}
+	if err := f.Append(json.RawMessage(`{"role":"user"}`)); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	g, created, err := Open(p, Header{})
+	if err != nil || created || len(g.Messages) != 1 || g.Header.Model != testHeader().Model {
+		t.Fatalf("reopen: created = %v, err = %v", created, err)
+	}
+	g.Close()
+	if st, _ := os.Stat(p); st.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %v, want 0600", st.Mode().Perm())
+	}
+}
+
+// A file that is not a session, even one unfinished line, is never overwritten.
+func TestPartialFirstLineIsNotASession(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "notes")
+	if err := os.WriteFile(p, []byte("not a session"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Open(p, testHeader()); err == nil {
+		t.Fatal("opened a file with no complete header")
+	}
+	if b, _ := os.ReadFile(p); string(b) != "not a session" {
+		t.Fatalf("file changed: %q", b)
 	}
 }
 

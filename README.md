@@ -156,6 +156,8 @@ continue, the caller starts a new run with the same session file.
 - The header `format` is 2 since 2026-11-10, when the `sandbox` field became `tool_profile`.
   Continuing a file with any other `format` is bad usage (exit 2); Quill does not convert
   it.
+- A session file of zero bytes is treated as missing (2026-11-10): a run killed while
+  creating the session leaves one, and the next run starts the session in it.
 - Quill appends after each completed step, so a crash leaves a valid file. It locks the file
   so two runs cannot share it, and creates it with mode `0600`. The file holds prompts and
   file contents; callers treat it as sensitive.
@@ -212,7 +214,8 @@ damage, the agent stops instead of guessing.
 
 A caller can give the model extra tools from one MCP server that the caller configures.
 
-- `--mcp-url URL` names the server: `http` or `https`, with no credentials in the URL.
+- `--mcp-url URL` names the server: `http` or `https`, with no credentials, query string,
+  or fragment in the URL (a URL with any of them is bad usage, and is not echoed).
   Without the flag Quill does not use MCP. Quill reads no MCP configuration from the
   workspace or any file.
 - Only tools over the Streamable HTTP transport are supported. There are no stdio servers,
@@ -221,8 +224,19 @@ A caller can give the model extra tools from one MCP server that the caller conf
 - An optional token comes only from the environment variable `QUILL_MCP_TOKEN`, never from
   a flag or a file. Quill sends it as `Authorization: Bearer <token>` on every request to
   the server and does not follow redirects. Over plain `http` it travels unencrypted.
-- The token is not passed to tools and Quill does not write it to stderr, the events, or
-  the session file. Quill's own error messages leave out the URL and the token.
+- The token is not passed to tools, and Quill itself never writes it to stderr, the
+  events, or the session file. Text from the server could echo it back, so Quill replaces
+  the exact token string with `<token>` in tool result text and in error messages. A
+  server that returns it encoded or split, or puts it in a tool definition, is not caught.
+- Network failures are described by their kind only (for example `connection refused`,
+  `timed out`, `DNS lookup failed`), never with the Go error text, so the URL, host,
+  address, and port do not appear in the events, the session file, or what the model
+  sees. Other error text comes from the SDK and the server (HTTP status text, JSON-RPC
+  error messages); Quill cuts it to 500 bytes and replaces control characters, but does
+  not otherwise vet it. Tool results are the server's content and are not vetted at all.
+- Every HTTP response body from the server, and every server-sent event, is limited to
+  4 MiB (4,194,304 bytes). A larger tool result is a tool error; a larger response at
+  the start is a start failure.
 - A new session connects, lists the server's tools once, and offers each as a tool named
   `mcp__<name>` with the server's description and input schema. They are sorted by name
   and appended after the built-in tools in the session header, so the tool list is fixed
@@ -230,10 +244,12 @@ A caller can give the model extra tools from one MCP server that the caller conf
   seen.
 - Both tool profiles get the MCP tools. `--tools read-only` removes Quill's own write,
   edit, and shell tools; it says nothing about what an MCP tool does.
-- Listing fails closed. Every `mcp__<name>` must match `^[a-zA-Z0-9_-]{1,64}$` and be
-  unique, and every input schema must be an object schema. The limits are 64 tools and
-  100,000 bytes for all MCP tool definitions together. A server with no tools is also a
-  failure.
+- Listing fails closed on these checks only: every `mcp__<name>` must match
+  `^[a-zA-Z0-9_-]{1,64}$` and be unique, every input schema must have `"type": "object"`,
+  and there must be 1 to 64 tools with at most 100,000 bytes of definitions together.
+  Schemas are not checked further. A schema the Claude API rejects is expected to fail
+  every request of the session with `provider_error` (`bad_request`); this is not
+  verified live.
 - Continuing a session uses the stored tools and never lists again. The URL is not stored
   and may differ between runs; Quill connects to it at the start of each run. Continuing
   a session that has MCP tools without `--mcp-url`, or giving `--mcp-url` for a session
@@ -243,8 +259,9 @@ A caller can give the model extra tools from one MCP server that the caller conf
   becomes `[non-text content omitted]`, and structured content is ignored. The server's
   `isError` makes it a tool error. The output is truncated like any tool output.
 - A failed call is a tool error the model sees, and the run continues: a transport
-  failure, a JSON-RPC error, or a server asking for input. After a transport failure the
-  next call opens a new connection.
+  failure, an HTTP error status, a JSON-RPC error, or a server asking for input. After
+  anything but a JSON-RPC error in a successful HTTP response, the next call opens a new
+  MCP session (for example after the server restarted), with 30 seconds to connect.
 - Each call has a fixed 10-minute timeout. On a timeout or when the run stops, Quill stops
   waiting and sends the MCP cancellation; whether the server stops its work is up to the
   server.
@@ -252,7 +269,8 @@ A caller can give the model extra tools from one MCP server that the caller conf
   that fail the checks above), the model is not called and the run ends with status
   `mcp_error`, exit 6, and `error.kind` `mcp_unavailable`, with `message` and, when the
   server answered with an HTTP error, `http_status`. Connecting and listing have 30
-  seconds. A new session file is not created.
+  seconds (the SDK can add about 5 more after a timeout). A new session file is not
+  created.
 - Security position. The server and its tool names, descriptions, and schemas are trusted,
   because the caller configured the server; they go to the model as tool definitions.
   Tool results are not trusted: they are untrusted content like any tool output. The token

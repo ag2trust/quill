@@ -134,8 +134,9 @@ func Parse(args []string, stdin io.Reader, getenv func(string) string) (Config, 
 	if mcpURL != "" {
 		// The URL is not echoed: it may carry something private.
 		u, err := url.Parse(mcpURL)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
-			return Config{}, usagef("invalid --mcp-url: want an http or https URL without credentials")
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil ||
+			u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+			return Config{}, usagef("invalid --mcp-url: want an http or https URL without credentials, query, or fragment")
 		}
 		c.MCPURL = u.String()
 		c.MCPToken = getenv("QUILL_MCP_TOKEN")

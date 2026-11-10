@@ -239,8 +239,9 @@ func TestE2EMCPStartFailure(t *testing.T) {
 			if _, err := os.Stat(sess); !os.IsNotExist(err) {
 				t.Errorf("a session file was left behind (stat err %v)", err)
 			}
-			if out := r.stdout + r.stderr; strings.Contains(out, mcpToken) || strings.Contains(out, tc.srv.URL()) {
-				t.Errorf("output carries the token or URL: %s", out)
+			// Neither the token nor the server's address, in any form.
+			if out := r.stdout + r.stderr; strings.Contains(out, mcpToken) || strings.Contains(out, strings.TrimPrefix(tc.srv.URL(), "http://")) {
+				t.Errorf("output carries the token or the server address: %s", out)
 			}
 		})
 	}
@@ -304,13 +305,14 @@ func TestE2EMCPFailureMidRun(t *testing.T) {
 	if len(res) != 1 || !res[0].IsError || !strings.HasPrefix(res[0].Content, "MCP call failed: ") {
 		t.Errorf("result after the failure = %+v", res)
 	}
-	if strings.Contains(r.stdout, srv.URL()) {
-		t.Error("stdout carries the server URL")
+	if strings.Contains(r.stdout, strings.TrimPrefix(srv.URL(), "http://")) {
+		t.Error("stdout carries the server address")
 	}
 }
 
 func TestE2EMCPBadURLIsBadUsage(t *testing.T) {
-	for _, u := range []string{"stdio://x", "example.com/mcp", "http://user:pw@example.com/mcp", "file:///tmp/x"} {
+	for _, u := range []string{"stdio://x", "example.com/mcp", "http://user:pw@example.com/mcp", "file:///tmp/x",
+		"https://example.com/mcp?key=pw", "https://example.com/mcp#pw"} {
 		r := runQuill(t, fakeapi.New(t), "task", "--workspace", t.TempDir(), "--mcp-url", u)
 		if r.code != 2 || r.stdout != "" {
 			t.Errorf("%s: exit %d, stdout %q", u, r.code, r.stdout)
@@ -318,5 +320,90 @@ func TestE2EMCPBadURLIsBadUsage(t *testing.T) {
 		if strings.Contains(r.stderr, "pw") {
 			t.Errorf("%s: stderr echoes the URL: %q", u, r.stderr)
 		}
+	}
+}
+
+// The server controls the text of a start failure: it is capped, cleaned of
+// control characters, and never carries the token.
+func TestE2EMCPStartFailureTextIsBounded(t *testing.T) {
+	srv := fakemcp.New(t, fakemcp.Tool{Name: "echo"})
+	msg := "denied \x1b[31m " + mcpToken + "\n" + strings.Repeat("y", 200000)
+	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "error": map[string]any{"code": -32000, "message": msg}})
+	srv.SetFailure(401, string(body))
+	r := runQuillEnv(t, fakeapi.New(t), []string{"QUILL_MCP_TOKEN=" + mcpToken}, "task", "--workspace", t.TempDir(), "--mcp-url", srv.URL())
+	l := last(t, r)
+	e, _ := l["error"].(map[string]any)
+	m, _ := e["message"].(string)
+	if r.code != 6 || e["http_status"] != float64(401) || !strings.Contains(m, "denied") {
+		t.Fatalf("exit = %d, run.completed = %.300v", r.code, l)
+	}
+	if len(m) > 600 || len(r.stderr) > 700 {
+		t.Errorf("message has %d bytes, stderr %d", len(m), len(r.stderr))
+	}
+	for what, text := range map[string]string{"message": m, "stderr": strings.TrimSuffix(r.stderr, "\n")} {
+		if strings.ContainsFunc(text, func(c rune) bool { return c < 0x20 || c == 0x7f }) || strings.Contains(text, mcpToken) {
+			t.Errorf("%s has control characters or the token: %.300q", what, text)
+		}
+	}
+}
+
+// A server that echoes the token cannot put it in the events or the session.
+func TestE2EMCPTokenEchoIsRedacted(t *testing.T) {
+	srv := fakemcp.New(t, fakemcp.Tool{Name: "leak", Call: func(context.Context, json.RawMessage) (*sdk.CallToolResult, error) {
+		return fakemcp.Text("you sent Bearer " + mcpToken), nil
+	}})
+	fake := fakeapi.New(t, fakeapi.ToolReply("tu1", "mcp__leak", `{}`), fakeapi.TextReply("done", events.Usage{}))
+	sess := filepath.Join(t.TempDir(), "s.jsonl")
+	r := runQuillEnv(t, fake, []string{"QUILL_MCP_TOKEN=" + mcpToken}, "task", "--workspace", t.TempDir(), "--session", sess, "--mcp-url", srv.URL())
+	if r.code != 0 {
+		t.Fatalf("exit = %d; stderr: %s", r.code, r.stderr)
+	}
+	if res := toolResults(t, fake.Requests()[1]); len(res) != 1 || res[0].Content != "you sent Bearer <token>" {
+		t.Errorf("tool result = %+v", res)
+	}
+	file, _ := os.ReadFile(sess)
+	if strings.Contains(r.stdout, mcpToken) || strings.Contains(string(file), mcpToken) {
+		t.Error("the token is in the events or the session file")
+	}
+}
+
+// A run killed while listing leaves a zero-byte session file. The next run
+// starts the session, MCP tools included.
+func TestE2EMCPEmptySessionFileStartsSession(t *testing.T) {
+	ws, sess := t.TempDir(), filepath.Join(t.TempDir(), "s.jsonl")
+	if err := os.WriteFile(sess, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := fakemcp.New(t, fakemcp.Tool{Name: "echo"})
+	fake := fakeapi.New(t, fakeapi.ToolReply("tu1", "mcp__echo", `{"a":1}`), fakeapi.TextReply("done", events.Usage{}))
+	r := runQuill(t, fake, "task", "--workspace", ws, "--session", sess, "--mcp-url", srv.URL())
+	if r.code != 0 {
+		t.Fatalf("exit = %d; stderr: %s", r.code, r.stderr)
+	}
+	if got, _ := json.Marshal(r.lines[0]["mcp_tools"]); string(got) != `["mcp__echo"]` {
+		t.Errorf("mcp_tools = %s", got)
+	}
+	// The file is now an ordinary session: it continues, with its MCP tools.
+	fake2 := fakeapi.New(t, fakeapi.TextReply("done", events.Usage{}))
+	r = runQuill(t, fake2, "more", "--workspace", ws, "--session", sess, "--mcp-url", srv.URL())
+	if r.code != 0 {
+		t.Fatalf("run 2 exit = %d; stderr: %s", r.code, r.stderr)
+	}
+	if req := request(t, fake2.Requests()[0]); len(req.Messages) < 4 || !strings.Contains(string(req.Tools), "mcp__echo") {
+		t.Errorf("run 2 sent %d messages, tools %s", len(req.Messages), req.Tools)
+	}
+}
+
+// And if listing fails for that empty file, no file is left.
+func TestE2EMCPEmptySessionFileStartFailure(t *testing.T) {
+	sess := filepath.Join(t.TempDir(), "s.jsonl")
+	if err := os.WriteFile(sess, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := fakemcp.New(t, fakemcp.Tool{Name: "echo"})
+	srv.Close()
+	r := runQuill(t, fakeapi.New(t), "task", "--workspace", t.TempDir(), "--session", sess, "--mcp-url", srv.URL())
+	if l := last(t, r); r.code != 6 || l["status"] != "mcp_error" {
+		t.Errorf("exit = %d, run.completed = %v", r.code, l)
 	}
 }

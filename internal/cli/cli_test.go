@@ -73,6 +73,9 @@ func TestUsageErrors(t *testing.T) {
 		{"mcp url without scheme", []string{"exec", "--mcp-url", "example.com/mcp", "x"}, "", keyEnv},
 		{"mcp url without host", []string{"exec", "--mcp-url", "http:///mcp", "x"}, "", keyEnv},
 		{"mcp url with credentials", []string{"exec", "--mcp-url", "https://u:p@example.com/mcp", "x"}, "", keyEnv},
+		{"mcp url with query", []string{"exec", "--mcp-url", "https://example.com/mcp?key=s3cret", "x"}, "", keyEnv},
+		{"mcp url with empty query", []string{"exec", "--mcp-url", "https://example.com/mcp?", "x"}, "", keyEnv},
+		{"mcp url with fragment", []string{"exec", "--mcp-url", "https://example.com/mcp#s3cret", "x"}, "", keyEnv},
 		{"mcp token with newline", []string{"exec", "--mcp-url", "https://example.com/mcp", "x"}, "",
 			env(map[string]string{"ANTHROPIC_API_KEY": "k", "QUILL_MCP_TOKEN": "a\nb"})},
 		{"bad env name", []string{"exec", "--env", "1BAD", "x"}, "", keyEnv},
@@ -145,5 +148,14 @@ func TestMCPURLAndToken(t *testing.T) {
 	c, err = Parse([]string{"exec", "x"}, strings.NewReader(""), vars)
 	if err != nil || c.MCPURL != "" || c.MCPToken != "" {
 		t.Errorf("config = %q, %q, %v", c.MCPURL, c.MCPToken, err)
+	}
+}
+
+func TestMCPURLErrorDoesNotEchoValue(t *testing.T) {
+	for _, u := range []string{"https://example.com/mcp?key=s3cret", "https://example.com/mcp#s3cret", "https://u:s3cret@example.com/mcp"} {
+		_, err := Parse([]string{"exec", "--mcp-url", u, "x"}, strings.NewReader(""), keyEnv)
+		if err == nil || strings.Contains(err.Error(), "s3cret") || strings.Contains(err.Error(), "example.com") {
+			t.Errorf("%s: err = %v", u, err)
+		}
 	}
 }

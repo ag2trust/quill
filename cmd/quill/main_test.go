@@ -460,9 +460,14 @@ func TestE2ESessionEmpty(t *testing.T) {
 	if err := os.WriteFile(sess, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	r := runQuill(t, fakeapi.New(t), "task", "--workspace", t.TempDir(), "--session", sess)
-	if r.code != 2 || r.stdout != "" || !strings.Contains(r.stderr, "session file is empty") || !strings.Contains(r.stderr, "delete it") {
-		t.Errorf("exit = %d, stdout = %q, stderr = %q", r.code, r.stdout, r.stderr)
+	// Zero bytes is what a run killed while creating the session leaves: the
+	// next run starts the session.
+	r := runQuill(t, fakeapi.New(t, fakeapi.TextReply("done", events.Usage{})), "task", "--workspace", t.TempDir(), "--session", sess)
+	if r.code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", r.code, r.stderr)
+	}
+	if b, _ := os.ReadFile(sess); !bytes.HasPrefix(b, []byte(`{"type":"session"`)) {
+		t.Errorf("session file = %q", b)
 	}
 }
 
