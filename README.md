@@ -189,11 +189,13 @@ damage, the agent stops instead of guessing.
 - Callers stop Quill with SIGTERM, and SIGKILL only if it has not exited after about 10
   seconds. SIGKILL cannot be caught; the container is the last backstop.
 
-### Output (2026-11-07)
+### Output (2026-11-07, `format` 2026-11-10)
 
 - stdout is always JSON lines. stderr is for human diagnostics only.
 - Events: `run.started`, `item.started`, `item.completed` (assistant messages and tool calls
   with name and input), and `run.completed`.
+- `run.started` carries `format` (currently 1), raised on an incompatible change to the
+  events, alongside `version` (the Quill build).
 - Exactly one `run.completed`, always the last line, except after SIGKILL. No `run.completed`
   means Quill crashed, except exit 2, which reports on stderr only. A Go runtime crash also
   exits 2, but normally after `run.started`, so stdout is non-empty and has no

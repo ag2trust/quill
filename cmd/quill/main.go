@@ -76,6 +76,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 	startRun := func() {
 		started = true
 		_ = ew.RunStarted(events.RunStarted{
+			Format:  events.Format,
 			Session: cfg.SessionPath, Model: model, Effort: effort, Sandbox: sandbox,
 			Workspace: cfg.Workspace, Version: events.Version, EnvPassed: envPassed,
 		})

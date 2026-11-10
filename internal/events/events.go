@@ -12,6 +12,10 @@ import (
 // Version is the quill version reported in run.started.
 const Version = "0.1.0-dev"
 
+// Format is the event interface version reported in run.started. Raise it on
+// an incompatible change to the events.
+const Format = 1
+
 // ErrCompleted is returned by any write after run.completed.
 var ErrCompleted = errors.New("events: run already completed")
 
@@ -90,6 +94,7 @@ type Item struct {
 }
 
 type RunStarted struct {
+	Format    int      `json:"format"`
 	Session   string   `json:"session,omitempty"`
 	Model     string   `json:"model"`
 	Effort    string   `json:"effort"`
