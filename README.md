@@ -52,7 +52,7 @@ handling one prompt is a **run**.
   the run with the SDK's retries, honouring `retry-after`, within `--timeout`. Longer waits and
   failover belong to the caller.
 
-### Command line (2026-11-07, limit defaults 2026-11-08)
+### Command line (2026-11-07, limit defaults 2026-11-08, `--tools` 2026-11-10)
 
 Modelled on `codex exec`, OpenAI's headless CLI.
 
@@ -66,19 +66,21 @@ echo "$TASK" | quill exec [flags] -
 | `--workspace DIR` | Directory the tools work in. | current directory |
 | `--model ID` | Claude model. | `claude-opus-5-5` |
 | `--effort LEVEL` | Model effort. | `high` |
-| `--sandbox read-only\|workspace-write` | Tool profile. `read-only` has no write, edit, or shell tools. | `workspace-write` |
+| `--tools read-only\|read-write` | Tool profile. `read-only` has no write, edit, or shell tools. | `read-write` |
 | `--max-steps N`, `--max-tokens N`, `--timeout D` | Hard limits for the run. `--max-tokens` counts input, output, and cache-write tokens, not cache reads. | `100`, `2000000`, `30m` |
 | `--session FILE` | Session file to create or continue. See Sessions. | none |
 | `--env NAME` | Pass this environment variable to tools. Repeatable. | none |
 
 - The API key comes only from `ANTHROPIC_API_KEY`, never from a flag.
+- `--tools` (2026-11-10, replacing `--sandbox read-only|workspace-write`) only selects which
+  tools exist. It is not isolation; the container is. `--sandbox` is no longer a flag.
 - Flags carry options only. The prompt never goes in argv, where it would be visible in `ps`
   and limited in size.
 
-### Tools (2026-11-07, details 2026-11-08)
+### Tools (2026-11-07, details 2026-11-08, profile names 2026-11-10)
 
 - `read`, `write`, `edit` (exact text), `list`, `glob`, `search`, `shell`, and `raise_blocker`.
-  The read-only sandbox has `read`, `list`, `glob`, `search`, and `raise_blocker`.
+  The `read-only` profile has `read`, `list`, `glob`, `search`, and `raise_blocker`.
 - The `shell` description steers the model to the file tools for reading, finding, and
   changing files; it is a nudge, not enforced.
 - Each shell command has a fixed 10-minute timeout. A timed-out command is killed and
@@ -111,7 +113,7 @@ echo "$TASK" | quill exec [flags] -
 - The model may request several tools in one response. Quill runs them one at a time, in
   order.
 
-### Sessions (2026-11-07)
+### Sessions (2026-11-07, `format` 2 2026-11-10)
 
 Quill is stateless. One process handles one run and then exits, whatever the outcome. To
 continue, the caller starts a new run with the same session file.
@@ -126,12 +128,15 @@ continue, the caller starts a new run with the same session file.
   one message in Claude API format, exactly as sent or received.
 
   ```jsonl
-  {"type":"session","format":1,"model":"claude-opus-5-5","effort":"high","sandbox":"workspace-write","system":"<full system prompt>","tools":[...]}
+  {"type":"session","format":2,"model":"claude-opus-5-5","effort":"high","tool_profile":"read-write","system":"<full system prompt>","tools":[...]}
   {"type":"message","message":{"role":"user","content":[{"type":"text","text":"Fix the failing test"}]}}
   ```
 
-- Continuing with a different `--model`, `--effort`, or `--sandbox` set explicitly is bad
+- Continuing with a different `--model`, `--effort`, or `--tools` set explicitly is bad
   usage (exit 2); unset flags take the session's values.
+- The header `format` is 2 since 2026-11-10, when the `sandbox` field became `tool_profile`.
+  Continuing a file with any other `format` is bad usage (exit 2); Quill does not convert
+  it.
 - Quill appends after each completed step, so a crash leaves a valid file. It locks the file
   so two runs cannot share it, and creates it with mode `0600`. The file holds prompts and
   file contents; callers treat it as sensitive.
@@ -174,6 +179,16 @@ damage, the agent stops instead of guessing.
 - This stops accidental leaks only. A same-user tool can still read the key from Quill's
   process. See the safety baseline.
 
+### API key in production (2026-11-10)
+
+- In production the caller keeps the real API key outside the container. It gives Quill
+  model access through an HTTP reverse proxy that mirrors the Claude API: Quill is pointed
+  at it with `ANTHROPIC_BASE_URL` and given a placeholder or per-run token as
+  `ANTHROPIC_API_KEY`.
+- Quill needs no change for this; it already honours `ANTHROPIC_BASE_URL`. The proxy is the
+  caller's component and is not part of this repository.
+- Without such a proxy, the real key is in Quill's process and same-user tools can read it.
+
 ### Cleanup and stopping (2026-11-07)
 
 - Each shell command runs in its own process group, tracked by Quill.
@@ -194,8 +209,9 @@ damage, the agent stops instead of guessing.
 - stdout is always JSON lines. stderr is for human diagnostics only.
 - Events: `run.started`, `item.started`, `item.completed` (assistant messages and tool calls
   with name and input), and `run.completed`.
-- `run.started` carries `format` (currently 1), raised on an incompatible change to the
-  events, alongside `version` (the Quill build).
+- `run.started` carries `format` (currently 2), raised on an incompatible change to the
+  events, alongside `version` (the Quill build). Format 2 (2026-11-10) renamed the
+  `sandbox` field of `run.started` to `tool_profile`.
 - Exactly one `run.completed`, always the last line, except after SIGKILL. No `run.completed`
   means Quill crashed, except exit 2, which reports on stderr only. A Go runtime crash also
   exits 2, but normally after `run.started`, so stdout is non-empty and has no
@@ -253,9 +269,10 @@ damage, the agent stops instead of guessing.
   and restricted network.
 - Run Quill under an init in containers (`docker run --init` or tini) so orphaned processes
   are reaped.
-- API keys must not reach tools. The proof of concept only keeps the key out of the tool
-  environment. That is not enough, because a same-user process can inspect Quill. Before
-  production, run tools as a separate user, or send model calls through a small proxy.
+- API keys must not reach tools. Quill only keeps the key out of the tool environment.
+  That is not enough, because a same-user process can inspect Quill. In production the
+  real key stays outside the container, behind the caller's reverse proxy (see "API key in
+  production", 2026-11-10); Quill then holds only a placeholder or per-run token.
 - A shell cannot be made read-only by rules, so the read-only profile has no shell.
 - Fail closed on unknown tools, malformed responses, and policy errors.
 - No prompts, file contents, or secrets in logs. The stdout event stream is the caller's

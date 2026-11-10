@@ -25,7 +25,7 @@ type m map[string]any
 
 func setup(t *testing.T) (*Registry, string) {
 	ws := newWS(t)
-	return NewRegistry(WorkspaceWrite, ws, nil), ws
+	return NewRegistry(ReadWrite, ws, nil), ws
 }
 
 func TestWriteReadRoundTrip(t *testing.T) {

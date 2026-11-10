@@ -92,8 +92,8 @@ func checkStream(t *testing.T, code int, lines []map[string]any) {
 	if lines[0]["type"] != "run.started" {
 		t.Errorf("first line type = %v, want run.started", lines[0]["type"])
 	}
-	if lines[0]["format"] != float64(1) {
-		t.Errorf("run.started format = %v, want 1", lines[0]["format"])
+	if lines[0]["format"] != float64(2) {
+		t.Errorf("run.started format = %v, want 2", lines[0]["format"])
 	}
 	n := 0
 	for _, l := range lines {
@@ -257,7 +257,7 @@ func TestE2EBlockedThenResume(t *testing.T) {
 
 func TestE2EResumeModelMismatch(t *testing.T) {
 	for _, flag := range [][]string{
-		{"--model", "claude-haiku-5-5"}, {"--effort", "low"}, {"--sandbox", "read-only"},
+		{"--model", "claude-haiku-5-5"}, {"--effort", "low"}, {"--tools", "read-only"},
 	} {
 		t.Run(flag[0][2:], func(t *testing.T) {
 			ws, sess := t.TempDir(), filepath.Join(t.TempDir(), "s.jsonl")
@@ -498,9 +498,9 @@ func TestE2ESessionCorrupt(t *testing.T) {
 	}
 }
 
-func TestE2EResumeInheritsSandbox(t *testing.T) {
+func TestE2EResumeInheritsToolProfile(t *testing.T) {
 	ws, sess := t.TempDir(), filepath.Join(t.TempDir(), "s.jsonl")
-	r := runQuill(t, fakeapi.New(t, fakeapi.TextReply("done", events.Usage{})), "look", "--workspace", ws, "--session", sess, "--sandbox", "read-only")
+	r := runQuill(t, fakeapi.New(t, fakeapi.TextReply("done", events.Usage{})), "look", "--workspace", ws, "--session", sess, "--tools", "read-only")
 	if r.code != 0 {
 		t.Fatalf("run 1 exit = %d; stderr: %s", r.code, r.stderr)
 	}
@@ -512,8 +512,8 @@ func TestE2EResumeInheritsSandbox(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("run 2 exit = %d; stderr: %s", r.code, r.stderr)
 	}
-	if r.lines[0]["sandbox"] != "read-only" {
-		t.Errorf("run.started sandbox = %v", r.lines[0]["sandbox"])
+	if r.lines[0]["tool_profile"] != "read-only" {
+		t.Errorf("run.started tool_profile = %v", r.lines[0]["tool_profile"])
 	}
 	if _, err := os.Stat(filepath.Join(ws, "hello.txt")); !os.IsNotExist(err) {
 		t.Errorf("read-only session wrote hello.txt (stat err %v)", err)
@@ -552,5 +552,23 @@ func TestE2EStdoutClosed(t *testing.T) {
 	}
 	if entries, err := os.ReadDir(tmp); err != nil || len(entries) != 0 {
 		t.Errorf("TMPDIR not empty after exit: %v, %v", entries, err)
+	}
+}
+
+func TestE2EOldSessionFormatIsBadUsage(t *testing.T) {
+	ws, sess := t.TempDir(), filepath.Join(t.TempDir(), "s.jsonl")
+	old := `{"type":"session","format":1,"model":"claude-opus-5-5","effort":"high","sandbox":"workspace-write","system":"s","tools":[]}` + "\n"
+	if err := os.WriteFile(sess, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := runQuill(t, fakeapi.New(t), "more", "--workspace", ws, "--session", sess)
+	if r.code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr: %s", r.code, r.stderr)
+	}
+	if r.stdout != "" || !strings.Contains(r.stderr, "format 1") {
+		t.Errorf("stdout = %q, stderr = %q", r.stdout, r.stderr)
+	}
+	if b, _ := os.ReadFile(sess); string(b) != old {
+		t.Errorf("session file changed: %q", b)
 	}
 }
