@@ -64,5 +64,18 @@ Lookups, not discussions.
    history, thinking blocks after the compaction block included, was accepted on every
    later request without the thinking-binding beta. The compaction iteration reports its
    own cache reads and writes as well as input and output. Compaction is a beta API and
-   this is one run on one model; not seen here: the documented case where a request with
-   tools returns a compaction block with `content: null`, and a resumed session.
+   this is one run on one model. The run used the API's default summary prompt; Quill's
+   own `instructions` were added afterwards and have not been run live.
+10. Compaction, open and unverified:
+    - Usage: the docs say only that top-level `input_tokens` and `output_tokens` leave out
+      the compaction iteration. Quill assumes the same of the two cache fields and adds all
+      four from the compaction iteration. `TestLiveCompaction` now checks that each
+      top-level field equals the sum of the `message` iterations; not yet run with that
+      check. If the assumption is wrong, cache tokens of a compaction are counted twice.
+    - A compaction block with `content: null` (no summary, documented when tools are
+      present) has not been seen live. Quill keeps and replays it; the docs say the API
+      ignores it and nothing is compacted, so context keeps growing until a later
+      compaction succeeds.
+    - Compaction on a resumed session has not been run live.
+    - The session file and the request body are never trimmed, so both grow without bound
+      in a long session, and the request will eventually hit the API's request size limit.

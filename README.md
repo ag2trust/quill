@@ -58,6 +58,15 @@ handling one prompt is a **run**.
   Quill's history stays append-only and is still replayed byte-for-byte, so the session
   file format is unchanged. The compaction call is billed separately from the reply's
   top-level usage; Quill adds it to the run's usage and to the `--max-tokens` count.
+  - It needs a model that supports the beta. The API docs list Claude Fable 5 to 5.2,
+    Mythos 5 to 5.2 and Mythos Preview, Opus 4.6 to 4.8, 5 and 5.5, Sonnet 4.6, 5 and 5.5,
+    and Haiku 5.5. Other models, and gateways without the beta, are expected to fail every
+    request with `bad_request`; this is unverified.
+  - Each compaction rewrites the cached prefix, so the next request writes the cache anew.
+  - The summary prompt is Quill's own, not the API default: it asks for the goal,
+    decisions, files changed, current state, and next steps, and says not to call tools.
+    The API docs say that with tools in the request the summariser may call a tool
+    instead, and then no summary comes back and nothing is compacted.
 
 ### Command line (2026-11-07, limit defaults 2026-11-08, `--tools` 2026-11-10)
 

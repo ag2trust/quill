@@ -30,6 +30,14 @@ const (
 	compactBeta    = "compact-2026-01-12"
 	compactEdit    = "compact_20260112"
 	compactTrigger = 150000
+
+	// compactInstructions replaces the API's default summarisation prompt.
+	// With tools in the request the default can end in a tool call and no
+	// summary; this one says not to call tools.
+	compactInstructions = "Summarize the transcript above inside <summary></summary> tags so that the coding task " +
+		"can continue in a new context window where the transcript is no longer available. Include the goal, " +
+		"the decisions made and why, the files changed, the current state, and the next steps. " +
+		"Do not call any tools while writing this summary; respond with text only."
 )
 
 // Request is one Messages API call. Tools and Messages are stored raw JSON and
@@ -212,7 +220,8 @@ func requestBody(params anthropic.MessageNewParams, req Request, trigger int64) 
 		field("output_config", oc)
 	}
 	field("context_management", fmt.Appendf(nil,
-		`{"edits":[{"type":%q,"trigger":{"type":"input_tokens","value":%d}}]}`, compactEdit, trigger))
+		`{"edits":[{"type":%q,"trigger":{"type":"input_tokens","value":%d},"instructions":%q}]}`,
+		compactEdit, trigger, compactInstructions))
 	buf.WriteByte('}')
 	return buf.Bytes(), nil
 }

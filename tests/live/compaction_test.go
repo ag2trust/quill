@@ -33,6 +33,8 @@ type liveReply struct {
 	summary  bool     // the compaction block has a non-null summary
 	top      events.Usage
 	compact  events.Usage // sum of the compaction iterations
+	message  events.Usage // sum of the message iterations
+	iters    int          // entries in usage.iterations
 	compacts int
 }
 
@@ -71,10 +73,14 @@ func parseLiveReply(body []byte) (liveReply, error) {
 			r.summary = true
 		}
 	}
+	r.iters = len(msg.Usage.Iterations)
 	for _, it := range msg.Usage.Iterations {
-		if it.Type == "compaction" {
+		switch it.Type {
+		case "compaction":
 			r.compacts++
 			r.compact.Add(it.usage())
+		case "message":
+			r.message.Add(it.usage())
 		}
 	}
 	return r, nil
@@ -151,7 +157,7 @@ func TestLiveCompaction(t *testing.T) {
 	env, _ := proc.BuildEnv(os.Getenv, nil, t.TempDir())
 	runner := proc.NewRunner(ws, env)
 	defer runner.KillAll(time.Second)
-	registry := tools.NewRegistry(tools.WorkspaceWrite, ws, tools.NewShell(runner, time.Minute))
+	registry := tools.NewRegistry(tools.ReadWrite, ws, tools.NewShell(runner, time.Minute))
 	first, err := prompt.FirstMessage(ws, task)
 	if err != nil {
 		t.Fatal(err)
@@ -179,6 +185,16 @@ func TestLiveCompaction(t *testing.T) {
 	for i, r := range replies {
 		want.Add(r.top)
 		want.Add(r.compact)
+		// Quill adds the compaction iterations to the top-level counts. That
+		// is only right if the top level, cache fields included, is exactly
+		// the message iterations; this is read from the raw reply, not from
+		// the provider's own sums.
+		if r.iters == 0 {
+			t.Errorf("reply %d has no usage.iterations", i)
+		} else if r.top != r.message {
+			t.Errorf("reply %d top-level usage = %+v, want the sum of its message iterations %+v (compaction iterations %+v)",
+				i, r.top, r.message, r.compact)
+		}
 		compactions += r.compacts
 		isCompact := len(r.blocks) > 0 && r.blocks[0] == "compaction"
 		if isCompact && compactAt < 0 {

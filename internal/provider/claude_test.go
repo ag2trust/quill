@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go/v2/option"
@@ -213,9 +214,26 @@ func TestStepRequestsCompaction(t *testing.T) {
 		if err := json.Unmarshal(reqs[i], &top); err != nil {
 			t.Fatal(err)
 		}
-		wantCM := `{"edits":[{"type":"compact_20260112","trigger":{"type":"input_tokens","value":` + want + `}}]}`
-		if string(top["context_management"]) != wantCM {
-			t.Errorf("request %d context_management = %s, want %s", i, top["context_management"], wantCM)
+		var cm struct {
+			Edits []struct {
+				Type    string `json:"type"`
+				Trigger struct {
+					Type  string      `json:"type"`
+					Value json.Number `json:"value"`
+				} `json:"trigger"`
+				Instructions string `json:"instructions"`
+			} `json:"edits"`
+		}
+		if err := json.Unmarshal(top["context_management"], &cm); err != nil || len(cm.Edits) != 1 {
+			t.Fatalf("request %d context_management = %s (%v)", i, top["context_management"], err)
+		}
+		e := cm.Edits[0]
+		if e.Type != "compact_20260112" || e.Trigger.Type != "input_tokens" || e.Trigger.Value.String() != want {
+			t.Errorf("request %d context_management = %s", i, top["context_management"])
+		}
+		if e.Instructions != compactInstructions || !strings.Contains(e.Instructions, "Do not call any tools") ||
+			!strings.Contains(e.Instructions, "<summary></summary>") {
+			t.Errorf("request %d instructions = %q", i, e.Instructions)
 		}
 	}
 }
