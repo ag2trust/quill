@@ -14,7 +14,7 @@ import (
 
 // Config is the validated configuration for one run.
 type Config struct {
-	Prompt, Workspace, Model, Effort, Sandbox, SessionPath, APIKey string
+	Prompt, Workspace, Model, Effort, Profile, SessionPath, APIKey string
 	MaxSteps                                                       int
 	MaxTokens                                                      int64
 	Timeout                                                        time.Duration
@@ -56,7 +56,7 @@ func Parse(args []string, stdin io.Reader, getenv func(string) string) (Config, 
 	fs.StringVar(&workspace, "workspace", ".", "")
 	fs.StringVar(&c.Model, "model", "claude-opus-5-5", "")
 	fs.StringVar(&c.Effort, "effort", "high", "")
-	fs.StringVar(&c.Sandbox, "sandbox", "workspace-write", "")
+	fs.StringVar(&c.Profile, "tools", "read-write", "")
 	fs.IntVar(&c.MaxSteps, "max-steps", 100, "")
 	fs.Int64Var(&c.MaxTokens, "max-tokens", 2000000, "")
 	fs.DurationVar(&c.Timeout, "timeout", 30*time.Minute, "")
@@ -103,10 +103,10 @@ func Parse(args []string, stdin io.Reader, getenv func(string) string) (Config, 
 	default:
 		return Config{}, usagef("invalid --effort %q (low|medium|high|xhigh|max)", c.Effort)
 	}
-	switch c.Sandbox {
-	case "read-only", "workspace-write":
+	switch c.Profile {
+	case "read-only", "read-write":
 	default:
-		return Config{}, usagef("invalid --sandbox %q (read-only|workspace-write)", c.Sandbox)
+		return Config{}, usagef("invalid --tools %q (read-only|read-write)", c.Profile)
 	}
 
 	for _, n := range envs {

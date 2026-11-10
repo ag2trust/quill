@@ -20,7 +20,7 @@ func TestDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Model != "claude-opus-5-5" || c.Effort != "high" || c.Sandbox != "workspace-write" ||
+	if c.Model != "claude-opus-5-5" || c.Effort != "high" || c.Profile != "read-write" ||
 		c.MaxSteps != 100 || c.MaxTokens != 2000000 || c.Timeout != 30*time.Minute ||
 		c.Prompt != "fix it" || c.APIKey != "k" {
 		t.Fatalf("unexpected config: %+v", c)
@@ -65,7 +65,8 @@ func TestUsageErrors(t *testing.T) {
 		{"two positionals", []string{"exec", "a", "b"}, "", keyEnv},
 		{"empty stdin", []string{"exec", "-"}, "  \n", keyEnv},
 		{"bad effort", []string{"exec", "--effort", "extreme", "x"}, "", keyEnv},
-		{"bad sandbox", []string{"exec", "--sandbox", "none", "x"}, "", keyEnv},
+		{"bad tools", []string{"exec", "--tools", "none", "x"}, "", keyEnv},
+		{"removed sandbox flag", []string{"exec", "--sandbox", "read-only", "x"}, "", keyEnv},
 		{"env api key", []string{"exec", "--env", "ANTHROPIC_API_KEY", "x"}, "", keyEnv},
 		{"bad env name", []string{"exec", "--env", "1BAD", "x"}, "", keyEnv},
 		{"missing key", []string{"exec", "x"}, "", env(nil)},

@@ -13,8 +13,8 @@ import (
 type Profile string
 
 const (
-	ReadOnly       Profile = "read-only"
-	WorkspaceWrite Profile = "workspace-write"
+	ReadOnly  Profile = "read-only"
+	ReadWrite Profile = "read-write"
 )
 
 // BlockerTool is handled by the run loop, never by the registry.
@@ -114,7 +114,7 @@ var blockerReasons = []string{"conflict", "unclear_task", "missing_access", "uns
 // NewRegistry builds a registry. shell may be nil (then the shell tool errors).
 func NewRegistry(profile Profile, workspace string, shell Shell) *Registry {
 	list := []definition{defRead, defList, defGlob, defSearch, defBlocker}
-	if profile == WorkspaceWrite {
+	if profile == ReadWrite {
 		list = []definition{defRead, defWrite, defEdit, defList, defGlob, defSearch, defShell, defBlocker}
 	}
 	allowed := map[string]bool{}

@@ -14,7 +14,7 @@ const Version = "0.1.0-dev"
 
 // Format is the event interface version reported in run.started. Raise it on
 // an incompatible change to the events.
-const Format = 1
+const Format = 2
 
 // ErrCompleted is returned by any write after run.completed.
 var ErrCompleted = errors.New("events: run already completed")
@@ -98,7 +98,7 @@ type RunStarted struct {
 	Session   string   `json:"session,omitempty"`
 	Model     string   `json:"model"`
 	Effort    string   `json:"effort"`
-	Sandbox   string   `json:"sandbox"`
+	Profile   string   `json:"tool_profile"`
 	Workspace string   `json:"workspace"`
 	Version   string   `json:"version"`
 	EnvPassed []string `json:"env_passed"`

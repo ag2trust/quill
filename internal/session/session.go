@@ -19,13 +19,17 @@ var ErrLocked = errors.New("session file is locked by another run")
 // or another run is still creating it.
 var ErrEmpty = errors.New("session file is empty")
 
+// Format is the session file version, written in the header. Raise it on an
+// incompatible change; a file with any other format is refused.
+const Format = 2
+
 // Header is line 1 of the session file.
 type Header struct {
 	Type    string          `json:"type"`
 	Format  int             `json:"format"`
 	Model   string          `json:"model"`
 	Effort  string          `json:"effort"`
-	Sandbox string          `json:"sandbox"`
+	Profile string          `json:"tool_profile"`
 	System  string          `json:"system"`
 	Tools   json.RawMessage `json:"tools"`
 }
@@ -59,7 +63,7 @@ func Open(path string, h Header) (*File, bool, error) {
 			fd.Close()
 			return nil, false, err
 		}
-		h.Type, h.Format = "session", 1
+		h.Type, h.Format = "session", Format
 		line, err := encodeHeader(h)
 		if err == nil {
 			_, err = fd.Write(line)
@@ -152,8 +156,8 @@ func (s *File) load() error {
 	if s.Header.Type != "session" {
 		return errors.New("session header: wrong type")
 	}
-	if s.Header.Format != 1 {
-		return fmt.Errorf("unsupported session format %d", s.Header.Format)
+	if s.Header.Format != Format {
+		return fmt.Errorf("session file has format %d; this Quill reads only format %d", s.Header.Format, Format)
 	}
 	for i, l := range lines[1:] {
 		var m struct {

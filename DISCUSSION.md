@@ -27,13 +27,12 @@ Claude only for now (decided). Remaining:
 
 ## 4. Safety
 
-1. Before production: separate user, local proxy, or both, to keep the API key from tools?
-2. What network access do tools get? Must package installs and test services be reachable?
-3. How is the workspace boundary enforced in Quill and in the container?
-4. What does the adversarial test suite contain, and does it block every release?
-5. Who performs independent security review?
-6. What may be logged, and how long are logs retained?
-7. Which actions need a hard block in every profile, for example pushing to Git?
+1. What network access do tools get? Must package installs and test services be reachable?
+2. How is the workspace boundary enforced in Quill and in the container?
+3. What does the adversarial test suite contain, and does it block every release?
+4. Who performs independent security review?
+5. What may be logged, and how long are logs retained?
+6. Which actions need a hard block in every profile, for example pushing to Git?
 
 ## 5. To verify
 

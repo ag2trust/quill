@@ -64,7 +64,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 	limitCtx, cancelLimit := context.WithTimeout(context.Background(), cfg.Timeout)
 
 	// Settings: from the flags, or from the session header when continuing.
-	model, effort, sandbox := cfg.Model, cfg.Effort, cfg.Sandbox
+	model, effort, profile := cfg.Model, cfg.Effort, cfg.Profile
 	var (
 		sess    *session.File
 		runner  *proc.Runner
@@ -77,7 +77,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 		started = true
 		_ = ew.RunStarted(events.RunStarted{
 			Format:  events.Format,
-			Session: cfg.SessionPath, Model: model, Effort: effort, Sandbox: sandbox,
+			Session: cfg.SessionPath, Model: model, Effort: effort, Profile: profile,
 			Workspace: cfg.Workspace, Version: events.Version, EnvPassed: envPassed,
 		})
 	}
@@ -130,12 +130,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 	}()
 
 	system := prompt.System()
-	toolDefs := tools.NewRegistry(tools.Profile(sandbox), cfg.Workspace, nil).Definitions()
+	toolDefs := tools.NewRegistry(tools.Profile(profile), cfg.Workspace, nil).Definitions()
 	var store session.Store = session.Discard{}
 	var history []json.RawMessage
 	if cfg.SessionPath != "" {
 		f, created, err := session.Open(cfg.SessionPath, session.Header{
-			Model: model, Effort: effort, Sandbox: sandbox, System: system, Tools: toolDefs,
+			Model: model, Effort: effort, Profile: profile, System: system, Tools: toolDefs,
 		})
 		if errors.Is(err, session.ErrLocked) {
 			return usage("--session: %v", err)
@@ -154,16 +154,16 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 		if !created {
 			h := f.Header
 			for _, s := range []struct{ flag, set, saved string }{
-				{"model", model, h.Model}, {"effort", effort, h.Effort}, {"sandbox", sandbox, h.Sandbox},
+				{"model", model, h.Model}, {"effort", effort, h.Effort}, {"tools", profile, h.Profile},
 			} {
 				if cfg.Explicit[s.flag] && s.set != s.saved {
 					return usage("--%s %q differs from the session's %q", s.flag, s.set, s.saved)
 				}
 			}
-			if h.Sandbox != string(tools.ReadOnly) && h.Sandbox != string(tools.WorkspaceWrite) {
-				return usage("--session: invalid sandbox %q in session header", h.Sandbox)
+			if h.Profile != string(tools.ReadOnly) && h.Profile != string(tools.ReadWrite) {
+				return usage("--session: invalid tool_profile %q in session header", h.Profile)
 			}
-			model, effort, sandbox = h.Model, h.Effort, h.Sandbox
+			model, effort, profile = h.Model, h.Effort, h.Profile
 			system, toolDefs = h.System, h.Tools
 			history = f.Messages
 		}
@@ -191,7 +191,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 	}
 
 	runner = proc.NewRunner(cfg.Workspace, env)
-	registry := tools.NewRegistry(tools.Profile(sandbox), cfg.Workspace, tools.NewShell(runner, shellTimeout))
+	registry := tools.NewRegistry(tools.Profile(profile), cfg.Workspace, tools.NewShell(runner, shellTimeout))
 
 	loop := &agent.Loop{
 		Client:   provider.NewClaude(cfg.APIKey),

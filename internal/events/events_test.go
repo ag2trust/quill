@@ -103,8 +103,8 @@ func TestOneLinePerEvent(t *testing.T) {
 		}
 	}
 	started := decode(t, lines[0])
-	if started["format"] != float64(1) {
-		t.Errorf("run.started format = %v, want 1", started["format"])
+	if started["format"] != float64(2) {
+		t.Errorf("run.started format = %v, want 2", started["format"])
 	}
 	if started["version"] != Version {
 		t.Errorf("run.started version = %v, want %q", started["version"], Version)
