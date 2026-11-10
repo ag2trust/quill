@@ -41,12 +41,12 @@ func TestDefinitionsStable(t *testing.T) {
 	if got := names(t, a); !reflect.DeepEqual(got, []string{"read", "list", "glob", "search", "raise_blocker"}) {
 		t.Fatalf("read-only names: %v", got)
 	}
-	w := NewRegistry(WorkspaceWrite, "/x", nil).Definitions()
+	w := NewRegistry(ReadWrite, "/x", nil).Definitions()
 	want := []string{"read", "write", "edit", "list", "glob", "search", "shell", "raise_blocker"}
 	if got := names(t, w); !reflect.DeepEqual(got, want) {
 		t.Fatalf("write names: %v", got)
 	}
-	if !bytes.Equal(w, NewRegistry(WorkspaceWrite, "/z", nil).Definitions()) {
+	if !bytes.Equal(w, NewRegistry(ReadWrite, "/z", nil).Definitions()) {
 		t.Fatal("write definitions differ")
 	}
 }
@@ -64,14 +64,14 @@ func TestReadOnlyRefusesWrite(t *testing.T) {
 }
 
 func TestUnknownField(t *testing.T) {
-	r := NewRegistry(WorkspaceWrite, newWS(t), nil)
+	r := NewRegistry(ReadWrite, newWS(t), nil)
 	if res := r.Run(context.Background(), "read", json.RawMessage(`{"path":"a","bogus":1}`)); !res.IsError {
 		t.Fatalf("got %+v", res)
 	}
 }
 
 func TestMissingRequired(t *testing.T) {
-	r := NewRegistry(WorkspaceWrite, newWS(t), nil)
+	r := NewRegistry(ReadWrite, newWS(t), nil)
 	for _, c := range [][2]string{{"read", `{}`}, {"write", `{"path":"a"}`}, {"edit", `{"path":"a","old_text":"x"}`}} {
 		if res := r.Run(context.Background(), c[0], json.RawMessage(c[1])); !res.IsError {
 			t.Errorf("%s: %+v", c[0], res)
@@ -80,7 +80,7 @@ func TestMissingRequired(t *testing.T) {
 }
 
 func TestBlockerAndNilShell(t *testing.T) {
-	r := NewRegistry(WorkspaceWrite, newWS(t), nil)
+	r := NewRegistry(ReadWrite, newWS(t), nil)
 	res := r.Run(context.Background(), BlockerTool, json.RawMessage(`{}`))
 	if !res.IsError || res.Content != "raise_blocker is handled by the run loop" {
 		t.Fatalf("%+v", res)
@@ -96,7 +96,7 @@ func (f *fakeShell) Run(_ context.Context, c string) Result { f.got = c; return 
 
 func TestShellDispatch(t *testing.T) {
 	fs := &fakeShell{}
-	r := NewRegistry(WorkspaceWrite, newWS(t), fs)
+	r := NewRegistry(ReadWrite, newWS(t), fs)
 	res := r.Run(context.Background(), "shell", json.RawMessage(`{"command":"echo hi"}`))
 	if res.IsError || res.Content != "ok" || fs.got != "echo hi" {
 		t.Fatalf("%+v %q", res, fs.got)
@@ -126,7 +126,7 @@ func TestReadOnlyRefusesEditAndShell(t *testing.T) {
 }
 
 func TestTrailingData(t *testing.T) {
-	r := NewRegistry(WorkspaceWrite, newWS(t), nil)
+	r := NewRegistry(ReadWrite, newWS(t), nil)
 	if res := r.Run(context.Background(), "list", json.RawMessage(`{"path":"a"}}`)); !res.IsError {
 		t.Fatalf("%+v", res)
 	}
@@ -143,7 +143,7 @@ func TestDefinitionsCopy(t *testing.T) {
 
 // Changing tool definitions invalidates every cached session prefix; update these hashes deliberately.
 func TestDefinitionsGolden(t *testing.T) {
-	for p, want := range map[Profile]string{WorkspaceWrite: "9a8af1d118dffb904a6162b08c63a7700ad476f9c07687d5f8a8c8f74714cbc1", ReadOnly: "cbe82b833c847f7d429892da6009c7844e33fcb5f7377d0e498ed6081fc8f549"} {
+	for p, want := range map[Profile]string{ReadWrite: "9a8af1d118dffb904a6162b08c63a7700ad476f9c07687d5f8a8c8f74714cbc1", ReadOnly: "cbe82b833c847f7d429892da6009c7844e33fcb5f7377d0e498ed6081fc8f549"} {
 		sum := sha256.Sum256(NewRegistry(p, "/x", nil).Definitions())
 		if got := hex.EncodeToString(sum[:]); got != want {
 			t.Errorf("%s: sha256 %s, want %s", p, got, want)

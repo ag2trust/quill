@@ -78,7 +78,7 @@ func TestExitCodes(t *testing.T) {
 func TestOneLinePerEvent(t *testing.T) {
 	var buf bytes.Buffer
 	w := NewWriter(&buf)
-	if err := w.RunStarted(RunStarted{Model: "m", Version: Version}); err != nil {
+	if err := w.RunStarted(RunStarted{Format: Format, Model: "m", Version: Version}); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.ItemStarted(Item{Type: "tool_call", ID: "1", Name: "shell", Input: json.RawMessage(`{"command":"ls"}`)}); err != nil {
@@ -101,6 +101,13 @@ func TestOneLinePerEvent(t *testing.T) {
 		if m["type"] != want[i] {
 			t.Errorf("line %d type %v", i, m["type"])
 		}
+	}
+	started := decode(t, lines[0])
+	if started["format"] != float64(2) {
+		t.Errorf("run.started format = %v, want 2", started["format"])
+	}
+	if started["version"] != Version {
+		t.Errorf("run.started version = %v, want %q", started["version"], Version)
 	}
 	if decode(t, lines[2])["item"].(map[string]any)["text"] != "hi\nthere" {
 		t.Fatal("item not nested")

@@ -1,7 +1,7 @@
 # Open Questions
 
 Subjects to discuss. Nothing here is decided. See "Decided" in `README.md`; when a question is
-decided, move it there with the date. Started 2026-10-31, last revised 2026-11-08.
+decided, move it there with the date. Started 2026-10-31, last revised 2026-11-10.
 
 "Leaning" is a starting position to challenge, not a decision.
 
@@ -15,8 +15,7 @@ Claude only for now (decided). Remaining:
 ## 2. Interface
 
 1. Which fields does each event carry, exactly, beyond `run.completed`?
-2. How is the interface versioned, and how does a caller detect an incompatible version? The
-   session file has a `format` field; events do not yet.
+2. How should a caller react to an event `format` it does not know?
 3. Is a heartbeat event needed during a long shell command, so callers can tell a busy run
    from a hung one?
 4. Should the shell command timeout become a flag, or a parameter the model sets per command?
@@ -28,13 +27,12 @@ Claude only for now (decided). Remaining:
 
 ## 4. Safety
 
-1. Before production: separate user, local proxy, or both, to keep the API key from tools?
-2. What network access do tools get? Must package installs and test services be reachable?
-3. How is the workspace boundary enforced in Quill and in the container?
-4. What does the adversarial test suite contain, and does it block every release?
-5. Who performs independent security review?
-6. What may be logged, and how long are logs retained?
-7. Which actions need a hard block in every profile, for example pushing to Git?
+1. What network access do tools get? Must package installs and test services be reachable?
+2. How is the workspace boundary enforced in Quill and in the container?
+3. What does the adversarial test suite contain, and does it block every release?
+4. Who performs independent security review?
+5. What may be logged, and how long are logs retained?
+6. Which actions need a hard block in every profile, for example pushing to Git?
 
 ## 5. To verify
 

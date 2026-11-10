@@ -103,7 +103,7 @@ func TestShellEnvClean(t *testing.T) {
 // The registry's cap must not cut shell output a second time: the marker
 // must report the real number of bytes the shell dropped.
 func TestRegistryShellTruncatedOnce(t *testing.T) {
-	r := NewRegistry(WorkspaceWrite, newWS(t), newTestShell(t, []string{"PATH=/usr/bin:/bin"}, time.Second))
+	r := NewRegistry(ReadWrite, newWS(t), newTestShell(t, []string{"PATH=/usr/bin:/bin"}, time.Second))
 	got := r.Run(context.Background(), "shell", []byte(`{"command":"yes"}`))
 	if !got.IsError || len(got.Content) > OutputCap || !strings.HasSuffix(got.Content, "[killed after 1s timeout]") {
 		t.Fatalf("IsError=%v len=%d tail=%q", got.IsError, len(got.Content), got.Content[max(0, len(got.Content)-100):])

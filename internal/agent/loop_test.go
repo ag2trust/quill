@@ -86,7 +86,7 @@ func newHarness(t *testing.T, c provider.Client, shell tools.Shell) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg := tools.NewRegistry(tools.WorkspaceWrite, ws, shell)
+	reg := tools.NewRegistry(tools.ReadWrite, ws, shell)
 	h := &harness{ws: ws, store: &recStore{}, out: &bytes.Buffer{}}
 	h.loop = &Loop{
 		Client:   c,

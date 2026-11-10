@@ -12,7 +12,7 @@ import (
 
 func testHeader() Header {
 	return Header{
-		Model: "claude-opus-5-5", Effort: "high", Sandbox: "workspace-write",
+		Model: "claude-opus-5-5", Effort: "high", Profile: "read-write",
 		System: "sys <b> & \"q\"\nline2",
 		Tools:  json.RawMessage(`[{"name":"a<b>","x":"&"}]`),
 	}
@@ -48,8 +48,8 @@ func TestCreateThenReopen(t *testing.T) {
 	}
 	defer f.Close()
 	h := testHeader()
-	if f.Header.Type != "session" || f.Header.Format != 1 || f.Header.Model != h.Model ||
-		f.Header.Effort != h.Effort || f.Header.Sandbox != h.Sandbox || f.Header.System != h.System {
+	if f.Header.Type != "session" || f.Header.Format != Format || f.Header.Model != h.Model ||
+		f.Header.Effort != h.Effort || f.Header.Profile != h.Profile || f.Header.System != h.System {
 		t.Fatalf("header: %+v", f.Header)
 	}
 	if !bytes.Equal(f.Header.Tools, h.Tools) {
@@ -163,7 +163,7 @@ func TestHeaderIgnoredOnReopen(t *testing.T) {
 
 func TestBadFormat(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "s")
-	os.WriteFile(p, []byte(`{"type":"session","format":2}`+"\n"), 0o600)
+	os.WriteFile(p, []byte(`{"type":"session","format":1}`+"\n"), 0o600)
 	if _, _, err := Open(p, Header{}); err == nil {
 		t.Fatal("want error")
 	}
