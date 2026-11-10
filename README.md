@@ -66,7 +66,9 @@ handling one prompt is a **run**.
   - The summary prompt is Quill's own, not the API default: it asks for the goal,
     decisions, files changed, current state, and next steps, and says not to call tools.
     The API docs say that with tools in the request the summariser may call a tool
-    instead, and then no summary comes back and nothing is compacted.
+    instead, and then no summary comes back and nothing is compacted. They also say
+    that with custom instructions the summariser sees only the visible conversation, not
+    earlier thinking.
 
 ### Command line (2026-11-07, limit defaults 2026-11-08, `--tools` 2026-11-10)
 

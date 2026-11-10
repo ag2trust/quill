@@ -64,14 +64,18 @@ Lookups, not discussions.
    history, thinking blocks after the compaction block included, was accepted on every
    later request without the thinking-binding beta. The compaction iteration reports its
    own cache reads and writes as well as input and output. Compaction is a beta API and
-   this is one run on one model. The run used the API's default summary prompt; Quill's
-   own `instructions` were added afterwards and have not been run live.
+   this is one run on one model. The run used the API's default summary prompt.
+   A second run the same day (one run, same settings, with Quill's own `instructions`)
+   also completed in 15 steps with two compactions and a summary present. In every reply
+   of that run each of the four top-level usage fields, cache fields included, equalled
+   the sum of the `message` iterations, so adding the compaction iteration does not count
+   anything twice. The docs state this only for input and output tokens.
 10. Compaction, open and unverified:
-    - Usage: the docs say only that top-level `input_tokens` and `output_tokens` leave out
-      the compaction iteration. Quill assumes the same of the two cache fields and adds all
-      four from the compaction iteration. `TestLiveCompaction` now checks that each
-      top-level field equals the sum of the `message` iterations; not yet run with that
-      check. If the assumption is wrong, cache tokens of a compaction are counted twice.
+    - Observation, cause unverified: the first summarising call read far less from the
+      cache with Quill's instructions (about 2,500 tokens read, 55,600 written) than with
+      the default prompt (about 47,300 read, 11,100 written). One run each.
+    - Models or gateways without the beta are expected to fail with `bad_request`; not
+      tried.
     - A compaction block with `content: null` (no summary, documented when tools are
       present) has not been seen live. Quill keeps and replays it; the docs say the API
       ignores it and nothing is compacted, so context keeps growing until a later
