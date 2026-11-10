@@ -60,3 +60,11 @@ Lookups, not discussions.
    the API accepts that shape; neither stop has been triggered live.
 8. Verified 2026-11-08 (live): automatic prompt caching produces cache reads (about 9,800
    tokens read on the second step of `TestLiveCacheReads`).
+9. Verified 2026-11-10 (live, one run, Haiku 5.5, high effort, trigger lowered to the
+   50,000 minimum): `TestLiveCompaction` compacted twice in a 15-step run and completed.
+   Threshold compaction worked on non-streaming requests with client tools, and the full
+   history, thinking blocks after the compaction block included, was accepted on every
+   later request without the thinking-binding beta. The compaction iteration reports its
+   own cache reads and writes as well as input and output. Compaction is a beta API and
+   this is one run on one model; not seen here: the documented case where a request with
+   tools returns a compaction block with `content: null`, and a resumed session.
