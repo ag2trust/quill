@@ -92,6 +92,9 @@ func checkStream(t *testing.T, code int, lines []map[string]any) {
 	if lines[0]["type"] != "run.started" {
 		t.Errorf("first line type = %v, want run.started", lines[0]["type"])
 	}
+	if lines[0]["format"] != float64(1) {
+		t.Errorf("run.started format = %v, want 1", lines[0]["format"])
+	}
 	n := 0
 	for _, l := range lines {
 		if l["type"] == "run.completed" {
