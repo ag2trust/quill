@@ -66,7 +66,7 @@ func TestOnlyOneRunCompleted(t *testing.T) {
 func TestExitCodes(t *testing.T) {
 	cases := map[Status]int{
 		StatusCompleted: 0, StatusBlocked: 5, StatusLimitReached: 3,
-		StatusProviderError: 4, StatusCancelled: 143, StatusInternalError: 1,
+		StatusProviderError: 4, StatusCancelled: 143, StatusInternalError: 1, StatusMCPError: 6,
 	}
 	for s, want := range cases {
 		if got := s.ExitCode(); got != want {

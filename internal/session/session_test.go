@@ -235,8 +235,36 @@ func TestEmptyFile(t *testing.T) {
 	if err := os.WriteFile(p, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := Open(p, testHeader()); !errors.Is(err, ErrEmpty) {
-		t.Fatalf("want ErrEmpty, got %v", err)
+	// Zero bytes is an interrupted create: the session starts here.
+	f, created, err := Open(p, testHeader())
+	if err != nil || !created || f.Header.Model != testHeader().Model {
+		t.Fatalf("created = %v, err = %v", created, err)
+	}
+	if err := f.Append(json.RawMessage(`{"role":"user"}`)); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	g, created, err := Open(p, Header{})
+	if err != nil || created || len(g.Messages) != 1 || g.Header.Model != testHeader().Model {
+		t.Fatalf("reopen: created = %v, err = %v", created, err)
+	}
+	g.Close()
+	if st, _ := os.Stat(p); st.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %v, want 0600", st.Mode().Perm())
+	}
+}
+
+// A file that is not a session, even one unfinished line, is never overwritten.
+func TestPartialFirstLineIsNotASession(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "notes")
+	if err := os.WriteFile(p, []byte("not a session"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Open(p, testHeader()); err == nil {
+		t.Fatal("opened a file with no complete header")
+	}
+	if b, _ := os.ReadFile(p); string(b) != "not a session" {
+		t.Fatalf("file changed: %q", b)
 	}
 }
 
@@ -262,5 +290,59 @@ func TestAppendFailureMarksBroken(t *testing.T) {
 	}
 	if err := f.Append(msg1); err == nil || len(f.Messages) != 2 {
 		t.Fatal("want broken error and no recorded message")
+	}
+}
+
+func TestOpenWithHeaderFailureLeavesNoFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "s.jsonl")
+	boom := errors.New("boom")
+	if _, _, err := OpenWith(p, func() (Header, error) { return Header{}, boom }); !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want boom", err)
+	}
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Fatalf("file left behind (stat err %v)", err)
+	}
+	// The header function is not called for an existing file.
+	if f, _, err := Open(p, testHeader()); err != nil {
+		t.Fatal(err)
+	} else {
+		f.Close()
+	}
+	f, created, err := OpenWith(p, func() (Header, error) { t.Error("header called"); return Header{}, nil })
+	if err != nil || created {
+		t.Fatalf("created = %v, err = %v", created, err)
+	}
+	f.Close()
+}
+
+// A failed start leaves an empty file it found in place, still empty, and
+// removes its own file while it still holds the lock.
+func TestOpenWithHeaderFailureKeepsFoundFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "s.jsonl")
+	if err := os.WriteFile(p, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	boom := errors.New("boom")
+	if _, _, err := OpenWith(p, func() (Header, error) { return Header{}, boom }); !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want boom", err)
+	}
+	if st, err := os.Stat(p); err != nil || st.Size() != 0 {
+		t.Fatalf("found file not left empty: %v, %v", st, err)
+	}
+
+	// While the header of a new file is being built, the file is locked; when
+	// that fails it is already gone before the lock is released.
+	q := filepath.Join(t.TempDir(), "new.jsonl")
+	_, _, err := OpenWith(q, func() (Header, error) {
+		if _, _, err := Open(q, Header{}); !errors.Is(err, ErrLocked) {
+			t.Errorf("second open during create: %v, want ErrLocked", err)
+		}
+		return Header{}, boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want boom", err)
+	}
+	if _, err := os.Stat(q); !os.IsNotExist(err) {
+		t.Fatalf("created file left behind (stat err %v)", err)
 	}
 }

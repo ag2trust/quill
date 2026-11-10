@@ -29,6 +29,7 @@ const (
 	StatusProviderError Status = "provider_error"
 	StatusCancelled     Status = "cancelled"
 	StatusInternalError Status = "internal_error"
+	StatusMCPError      Status = "mcp_error"
 )
 
 // ExitCode maps a status to the process exit code.
@@ -44,6 +45,8 @@ func (s Status) ExitCode() int {
 		return 4
 	case StatusCancelled:
 		return 143
+	case StatusMCPError:
+		return 6
 	default:
 		return 1
 	}
@@ -102,6 +105,7 @@ type RunStarted struct {
 	Workspace string   `json:"workspace"`
 	Version   string   `json:"version"`
 	EnvPassed []string `json:"env_passed"`
+	MCPTools  []string `json:"mcp_tools"`
 }
 
 type RunCompleted struct {

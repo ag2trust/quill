@@ -15,9 +15,9 @@ import (
 // ErrLocked means another run holds the session file.
 var ErrLocked = errors.New("session file is locked by another run")
 
-// ErrEmpty means the session file has no header: a create was interrupted,
-// or another run is still creating it.
-var ErrEmpty = errors.New("session file is empty")
+// errEmpty means the session file has no bytes: a create was interrupted
+// before the header was written.
+var errEmpty = errors.New("session file is empty")
 
 // Format is the session file version, written in the header. Raise it on an
 // incompatible change; a file with any other format is refused.
@@ -55,29 +55,22 @@ type File struct {
 // Open creates the file with header h if missing, or loads it (ignoring h).
 // The file stays locked until Close.
 func Open(path string, h Header) (*File, bool, error) {
+	return OpenWith(path, func() (Header, error) { return h, nil })
+}
+
+// OpenWith is Open with the header built by header, which is called only
+// when the file is created or is empty (zero bytes, left by a killed run or
+// made by the caller). If it fails, its error is returned and the file is
+// removed if this call created it, or left empty if it was found.
+func OpenWith(path string, header func() (Header, error)) (*File, bool, error) {
 	// O_EXCL fails on any existing path, including a dangling symlink.
 	fd, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
-		sf := &File{f: fd}
 		if err := lock(fd); err != nil {
 			fd.Close()
 			return nil, false, err
 		}
-		h.Type, h.Format = "session", Format
-		line, err := encodeHeader(h)
-		if err == nil {
-			_, err = fd.Write(line)
-		}
-		if err == nil {
-			err = fd.Sync()
-		}
-		if err != nil {
-			fd.Close()
-			os.Remove(path) // best effort: never leave a headerless file
-			return nil, false, fmt.Errorf("write session header: %w", err)
-		}
-		sf.Header = h
-		return sf, true, nil
+		return initFile(fd, path, true, header)
 	}
 	if !errors.Is(err, os.ErrExist) {
 		return nil, false, err
@@ -95,11 +88,52 @@ func Open(path string, h Header) (*File, bool, error) {
 		return nil, false, err
 	}
 	sf := &File{f: fd}
-	if err := sf.load(); err != nil {
+	err = sf.load()
+	if errors.Is(err, errEmpty) {
+		// Zero bytes, and no run holds the file: a create was interrupted
+		// (a run killed while building the header). Start the session.
+		if err = fd.Chmod(0o600); err == nil {
+			return initFile(fd, path, false, header)
+		}
+	}
+	if err != nil {
 		fd.Close()
 		return nil, false, err
 	}
 	return sf, false, nil
+}
+
+// initFile writes the header to the empty, locked file fd. On failure a
+// file this run created is removed, and one it found is left empty: never a
+// headerless file with content.
+func initFile(fd *os.File, path string, created bool, header func() (Header, error)) (*File, bool, error) {
+	fail := func(err error) (*File, bool, error) {
+		// Before Close, while the lock is held: after it another run could
+		// take the empty file and then lose it to this removal.
+		if created {
+			os.Remove(path) // best effort
+		} else {
+			fd.Truncate(0) // best effort
+		}
+		fd.Close()
+		return nil, false, err
+	}
+	h, err := header()
+	if err != nil {
+		return fail(err)
+	}
+	h.Type, h.Format = "session", Format
+	line, err := encodeHeader(h)
+	if err == nil {
+		_, err = fd.Write(line)
+	}
+	if err == nil {
+		err = fd.Sync()
+	}
+	if err != nil {
+		return fail(fmt.Errorf("write session header: %w", err))
+	}
+	return &File{Header: h, f: fd}, true, nil
 }
 
 func lock(f *os.File) error {
@@ -128,6 +162,9 @@ func (s *File) load() error {
 	if err != nil {
 		return err
 	}
+	if len(data) == 0 {
+		return errEmpty
+	}
 	// valid is the length of the data kept; a partial final line is dropped.
 	valid := len(data)
 	if i := bytes.LastIndexByte(data, '\n'); i < len(data)-1 {
@@ -145,9 +182,7 @@ func (s *File) load() error {
 		}
 	}
 	if valid == 0 {
-		// Empty: a create was interrupted, or another run is still creating
-		// it (header not yet written).
-		return ErrEmpty
+		return errors.New("session file has no complete header")
 	}
 	lines := bytes.Split(data[:valid-1], []byte("\n"))
 	if err := json.Unmarshal(lines[0], &s.Header); err != nil {

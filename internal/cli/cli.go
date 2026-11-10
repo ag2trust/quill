@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,10 +16,13 @@ import (
 // Config is the validated configuration for one run.
 type Config struct {
 	Prompt, Workspace, Model, Effort, Profile, SessionPath, APIKey string
-	MaxSteps                                                       int
-	MaxTokens                                                      int64
-	Timeout                                                        time.Duration
-	EnvNames                                                       []string
+	// MCPURL is the caller's MCP server, or empty. MCPToken is its optional
+	// bearer token, from QUILL_MCP_TOKEN only.
+	MCPURL, MCPToken string
+	MaxSteps         int
+	MaxTokens        int64
+	Timeout          time.Duration
+	EnvNames         []string
 	// Explicit holds the names of flags the caller set.
 	Explicit map[string]bool
 }
@@ -49,6 +53,7 @@ func Parse(args []string, stdin io.Reader, getenv func(string) string) (Config, 
 		c         Config
 		workspace string
 		session   string
+		mcpURL    string
 		envs      envList
 	)
 	fs := flag.NewFlagSet("exec", flag.ContinueOnError)
@@ -62,6 +67,7 @@ func Parse(args []string, stdin io.Reader, getenv func(string) string) (Config, 
 	fs.DurationVar(&c.Timeout, "timeout", 30*time.Minute, "")
 	fs.StringVar(&session, "session", "", "")
 	fs.Var(&envs, "env", "")
+	fs.StringVar(&mcpURL, "mcp-url", "", "")
 
 	// Flags may appear before or after the positional prompt.
 	var positional []string
@@ -110,8 +116,8 @@ func Parse(args []string, stdin io.Reader, getenv func(string) string) (Config, 
 	}
 
 	for _, n := range envs {
-		if n == "ANTHROPIC_API_KEY" {
-			return Config{}, usagef("--env ANTHROPIC_API_KEY is not allowed")
+		if n == "ANTHROPIC_API_KEY" || n == "QUILL_MCP_TOKEN" {
+			return Config{}, usagef("--env %s is not allowed", n)
 		}
 		if !envName.MatchString(n) {
 			name, _, _ := strings.Cut(n, "=")
@@ -124,6 +130,20 @@ func Parse(args []string, stdin io.Reader, getenv func(string) string) (Config, 
 		return Config{}, usagef("ANTHROPIC_API_KEY is not set")
 	}
 	c.APIKey = getenv("ANTHROPIC_API_KEY")
+
+	if mcpURL != "" {
+		// The URL is not echoed: it may carry something private.
+		u, err := url.Parse(mcpURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil ||
+			u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+			return Config{}, usagef("invalid --mcp-url: want an http or https URL without credentials, query, or fragment")
+		}
+		c.MCPURL = u.String()
+		c.MCPToken = getenv("QUILL_MCP_TOKEN")
+		if strings.ContainsFunc(c.MCPToken, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+			return Config{}, usagef("QUILL_MCP_TOKEN contains control characters")
+		}
+	}
 
 	ws, err := filepath.Abs(workspace)
 	if err == nil {
