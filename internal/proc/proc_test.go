@@ -191,10 +191,25 @@ func TestBackgroundWriterKeepsRunning(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("took %v", elapsed)
 	}
-	if code != 0 || err != nil || !strings.HasPrefix(out.String(), "hi\n") {
-		t.Fatalf("got (%d, %v, %q)", code, err, out.String())
-	}
 	got := out.String() // Run must not write to out after returning
+	if code != 0 || err != nil {
+		t.Fatalf("got (%d, %v, %q)", code, err, got)
+	}
+	// The background subshell and the foreground echo race for the pipe, so
+	// "log" may precede "hi": require exactly one "hi" line among "log" lines.
+	his := 0
+	for _, line := range strings.SplitAfter(got, "\n") {
+		switch line {
+		case "hi\n":
+			his++
+		case "log\n", "":
+		default:
+			t.Fatalf("unexpected line %q in %q", line, got)
+		}
+	}
+	if his != 1 {
+		t.Fatalf("got %d \"hi\" lines in %q, want 1", his, got)
+	}
 	pgid := onlyGroup(t, r)
 	time.Sleep(1500 * time.Millisecond)
 	if err := syscall.Kill(-pgid, 0); err != nil {
