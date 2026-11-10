@@ -157,7 +157,8 @@ continue, the caller starts a new run with the same session file.
   Continuing a file with any other `format` is bad usage (exit 2); Quill does not convert
   it.
 - A session file of zero bytes is treated as missing (2026-11-10): a run killed while
-  creating the session leaves one, and the next run starts the session in it.
+  creating the session leaves one, or the caller made it, and the next run starts the
+  session in it.
 - Quill appends after each completed step, so a crash leaves a valid file. It locks the file
   so two runs cannot share it, and creates it with mode `0600`. The file holds prompts and
   file contents; callers treat it as sensitive.
@@ -236,7 +237,8 @@ A caller can give the model extra tools from one MCP server that the caller conf
   not otherwise vet it. Tool results are the server's content and are not vetted at all.
 - Every HTTP response body from the server, and every server-sent event, is limited to
   4 MiB (4,194,304 bytes). A larger tool result is a tool error; a larger response at
-  the start is a start failure.
+  the start is a start failure. The limit is on the whole response body, so a very long
+  streamed response with many progress or keepalive events can hit it.
 - A new session connects, lists the server's tools once, and offers each as a tool named
   `mcp__<name>` with the server's description and input schema. They are sorted by name
   and appended after the built-in tools in the session header, so the tool list is fixed
@@ -269,8 +271,8 @@ A caller can give the model extra tools from one MCP server that the caller conf
   that fail the checks above), the model is not called and the run ends with status
   `mcp_error`, exit 6, and `error.kind` `mcp_unavailable`, with `message` and, when the
   server answered with an HTTP error, `http_status`. Connecting and listing have 30
-  seconds (the SDK can add about 5 more after a timeout). A new session file is not
-  created.
+  seconds (the SDK can add about 5 more after a timeout). A session file this
+  run created is removed; a zero-byte file it found is left in place, still empty.
 - Security position. The server and its tool names, descriptions, and schemas are trusted,
   because the caller configured the server; they go to the model as tool definitions.
   Tool results are not trusted: they are untrusted content like any tool output. The token

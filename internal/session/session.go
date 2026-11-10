@@ -59,8 +59,9 @@ func Open(path string, h Header) (*File, bool, error) {
 }
 
 // OpenWith is Open with the header built by header, which is called only
-// when the file is created or is empty (zero bytes, left by a killed run). If it fails, the file is removed and its error
-// returned.
+// when the file is created or is empty (zero bytes, left by a killed run or
+// made by the caller). If it fails, its error is returned and the file is
+// removed if this call created it, or left empty if it was found.
 func OpenWith(path string, header func() (Header, error)) (*File, bool, error) {
 	// O_EXCL fails on any existing path, including a dangling symlink.
 	fd, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
@@ -69,7 +70,7 @@ func OpenWith(path string, header func() (Header, error)) (*File, bool, error) {
 			fd.Close()
 			return nil, false, err
 		}
-		return initFile(fd, path, header)
+		return initFile(fd, path, true, header)
 	}
 	if !errors.Is(err, os.ErrExist) {
 		return nil, false, err
@@ -92,7 +93,7 @@ func OpenWith(path string, header func() (Header, error)) (*File, bool, error) {
 		// Zero bytes, and no run holds the file: a create was interrupted
 		// (a run killed while building the header). Start the session.
 		if err = fd.Chmod(0o600); err == nil {
-			return initFile(fd, path, header)
+			return initFile(fd, path, false, header)
 		}
 	}
 	if err != nil {
@@ -102,13 +103,24 @@ func OpenWith(path string, header func() (Header, error)) (*File, bool, error) {
 	return sf, false, nil
 }
 
-// initFile writes the header to the empty, locked file fd.
-func initFile(fd *os.File, path string, header func() (Header, error)) (*File, bool, error) {
+// initFile writes the header to the empty, locked file fd. On failure a
+// file this run created is removed, and one it found is left empty: never a
+// headerless file with content.
+func initFile(fd *os.File, path string, created bool, header func() (Header, error)) (*File, bool, error) {
+	fail := func(err error) (*File, bool, error) {
+		// Before Close, while the lock is held: after it another run could
+		// take the empty file and then lose it to this removal.
+		if created {
+			os.Remove(path) // best effort
+		} else {
+			fd.Truncate(0) // best effort
+		}
+		fd.Close()
+		return nil, false, err
+	}
 	h, err := header()
 	if err != nil {
-		fd.Close()
-		os.Remove(path) // best effort: never leave a headerless file
-		return nil, false, err
+		return fail(err)
 	}
 	h.Type, h.Format = "session", Format
 	line, err := encodeHeader(h)
@@ -119,9 +131,7 @@ func initFile(fd *os.File, path string, header func() (Header, error)) (*File, b
 		err = fd.Sync()
 	}
 	if err != nil {
-		fd.Close()
-		os.Remove(path) // best effort: never leave a headerless file
-		return nil, false, fmt.Errorf("write session header: %w", err)
+		return fail(fmt.Errorf("write session header: %w", err))
 	}
 	return &File{Header: h, f: fd}, true, nil
 }

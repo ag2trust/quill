@@ -405,6 +405,9 @@ func (c *Client) describe(err error) string {
 // sanitize makes text the server can influence fit for an error message:
 // the token removed, control characters replaced, and capped.
 func (c *Client) sanitize(s string) string {
+	// The token goes first, from the whole text: cutting first could leave
+	// part of one. Responses are capped, so the text is bounded.
+	s = c.redact(s)
 	if len(s) > 4*maxErrorBytes {
 		s = s[:4*maxErrorBytes] // bound the work; cut properly below
 	}
@@ -413,7 +416,7 @@ func (c *Client) sanitize(s string) string {
 			return ' '
 		}
 		return r
-	}, strings.ToValidUTF8(c.redact(s), "?"))
+	}, strings.ToValidUTF8(s, "?"))
 	if len(s) > maxErrorBytes {
 		s = strings.ToValidUTF8(s[:maxErrorBytes], "") + " [...]"
 	}

@@ -394,7 +394,8 @@ func TestE2EMCPEmptySessionFileStartsSession(t *testing.T) {
 	}
 }
 
-// And if listing fails for that empty file, no file is left.
+// If listing fails for that empty file, the file stays, still empty: the
+// caller may have made it.
 func TestE2EMCPEmptySessionFileStartFailure(t *testing.T) {
 	sess := filepath.Join(t.TempDir(), "s.jsonl")
 	if err := os.WriteFile(sess, nil, 0o600); err != nil {
@@ -405,5 +406,8 @@ func TestE2EMCPEmptySessionFileStartFailure(t *testing.T) {
 	r := runQuill(t, fakeapi.New(t), "task", "--workspace", t.TempDir(), "--session", sess, "--mcp-url", srv.URL())
 	if l := last(t, r); r.code != 6 || l["status"] != "mcp_error" {
 		t.Errorf("exit = %d, run.completed = %v", r.code, l)
+	}
+	if st, err := os.Stat(sess); err != nil || st.Size() != 0 {
+		t.Errorf("the empty session file was not left in place: %v, %v", st, err)
 	}
 }

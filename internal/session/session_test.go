@@ -314,3 +314,35 @@ func TestOpenWithHeaderFailureLeavesNoFile(t *testing.T) {
 	}
 	f.Close()
 }
+
+// A failed start leaves an empty file it found in place, still empty, and
+// removes its own file while it still holds the lock.
+func TestOpenWithHeaderFailureKeepsFoundFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "s.jsonl")
+	if err := os.WriteFile(p, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	boom := errors.New("boom")
+	if _, _, err := OpenWith(p, func() (Header, error) { return Header{}, boom }); !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want boom", err)
+	}
+	if st, err := os.Stat(p); err != nil || st.Size() != 0 {
+		t.Fatalf("found file not left empty: %v, %v", st, err)
+	}
+
+	// While the header of a new file is being built, the file is locked; when
+	// that fails it is already gone before the lock is released.
+	q := filepath.Join(t.TempDir(), "new.jsonl")
+	_, _, err := OpenWith(q, func() (Header, error) {
+		if _, _, err := Open(q, Header{}); !errors.Is(err, ErrLocked) {
+			t.Errorf("second open during create: %v, want ErrLocked", err)
+		}
+		return Header{}, boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want boom", err)
+	}
+	if _, err := os.Stat(q); !os.IsNotExist(err) {
+		t.Fatalf("created file left behind (stat err %v)", err)
+	}
+}

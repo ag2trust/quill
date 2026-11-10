@@ -521,3 +521,13 @@ func TestCallConnectHasStartTimeout(t *testing.T) {
 		t.Errorf("call took %s", d)
 	}
 }
+
+// The token is removed before the text is cut, so no part of one survives.
+func TestSanitizeRedactsBeforeCutting(t *testing.T) {
+	token := strings.Repeat("s3cr3t-", 15) // 105 bytes
+	c := New("http://example.invalid/mcp", token, "test")
+	got := c.sanitize(strings.Repeat("p", 50) + strings.Repeat(token, 40))
+	if strings.Contains(got, "s3cr3t") || len(got) > maxErrorBytes+50 {
+		t.Errorf("sanitize left part of the token: %q", got)
+	}
+}
