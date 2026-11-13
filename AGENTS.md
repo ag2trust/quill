@@ -41,7 +41,7 @@ Run the full gate before pushing a PR:
 ./preflight.sh
 ```
 
-It checks the branch base, `gofmt`, `go vet`, `go test`, and static builds for linux/amd64,
-linux/arm64, and darwin/arm64. The pre-push hook runs the quick subset (branch base and
-`gofmt`); CI runs the rest on Linux and macOS. Never bypass the pre-push hook. Doc-only
-changes still run the gate.
+It checks the branch base, `gofmt`, `go vet`, `go test`, static builds for linux/amd64,
+linux/arm64, and darwin/arm64, and `govulncheck` (version-pinned, needs network). The
+pre-push hook runs the quick subset (branch base and `gofmt`); CI runs the rest on Linux
+and macOS. Never bypass the pre-push hook. Doc-only changes still run the gate.
