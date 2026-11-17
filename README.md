@@ -47,7 +47,7 @@ handling one prompt is a **run**.
 - Prompt caching is on, using automatic caching. To keep the cache valid, within a session:
   - the model, effort, tools, and system prompt never change;
   - history is append-only and replayed byte-for-byte, thinking blocks included, from the
-    latest compaction (see below);
+    latest compaction with a summary (see below);
   - tool output is truncated deterministically.
 - Transient provider errors (rate limited, overloaded, network) are retried briefly inside
   the run with the SDK's retries, honouring `retry-after`, within `--timeout`. Longer waits and

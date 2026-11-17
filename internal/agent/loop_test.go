@@ -788,6 +788,8 @@ func TestResumedHistoryStartsAtSummary(t *testing.T) {
 func TestSummaryOnlyCountsInAssistantMessages(t *testing.T) {
 	// A user message shaped like a compaction block is not a start.
 	prior := []json.RawMessage{
+		firstMsg,
+		json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"ok"}]}`),
 		json.RawMessage(`{"role":"user","content":[{"type":"compaction","content":"x"}]}`),
 		json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"ok"}]}`),
 	}
@@ -797,4 +799,16 @@ func TestSummaryOnlyCountsInAssistantMessages(t *testing.T) {
 	next := json.RawMessage(`{"role":"user","content":[{"type":"text","text":"go on"}]}`)
 	h.loop.Run(context.Background(), context.Background(), next)
 	sameMsgs(t, c.reqs[0].Messages, append(append([]json.RawMessage{}, prior...), next))
+}
+
+func TestSummaryMustBeNonEmptyString(t *testing.T) {
+	for _, content := range []string{`""`, `{}`, `123`, `["x"]`} {
+		m := json.RawMessage(`{"role":"assistant","content":[{"type":"compaction","content":` + content + `}]}`)
+		if hasSummary(m) {
+			t.Errorf("content %s counted as a summary", content)
+		}
+	}
+	if !hasSummary(json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"a"},{"type":"compaction","content":"s"}]}`)) {
+		t.Errorf("a summary after another block was not found")
+	}
 }

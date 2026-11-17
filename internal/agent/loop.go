@@ -270,8 +270,8 @@ func (l *Loop) add(m json.RawMessage) error {
 }
 
 // hasSummary reports whether m is an assistant message holding a compaction
-// block with a summary. A block whose content is null compacted nothing, and
-// the API ignores it, so it is never a starting point.
+// block with a summary: a non-empty string. A block whose content is null
+// compacted nothing, and the API ignores it, so it is never a starting point.
 func hasSummary(m json.RawMessage) bool {
 	var v struct {
 		Role    string `json:"role"`
@@ -284,7 +284,8 @@ func hasSummary(m json.RawMessage) bool {
 		return false
 	}
 	for _, b := range v.Content {
-		if b.Type == "compaction" && len(b.Content) > 0 && string(b.Content) != "null" {
+		var summary string
+		if b.Type == "compaction" && json.Unmarshal(b.Content, &summary) == nil && summary != "" {
 			return true
 		}
 	}

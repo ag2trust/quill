@@ -156,9 +156,12 @@ func TestLiveCompaction(t *testing.T) {
 	// type. Field names only: the body is never logged.
 	var starts []string
 	capture := func(r *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+		// The middleware runs once per attempt; the start is kept only for
+		// an attempt that succeeds, so it lines up with replies.
+		start := "unreadable"
 		if r.GetBody != nil {
 			if rb, gerr := r.GetBody(); gerr == nil {
-				starts = append(starts, requestStart(rb))
+				start = requestStart(rb)
 			}
 		}
 		res, err := next(r)
@@ -178,6 +181,7 @@ func TestLiveCompaction(t *testing.T) {
 		}
 		if lr, perr := parseLiveReply(body); perr == nil {
 			replies = append(replies, lr)
+			starts = append(starts, start)
 		}
 		return res, nil
 	}
