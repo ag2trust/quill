@@ -85,4 +85,10 @@ Lookups, not discussions.
     - Compaction on a resumed session has not been run live.
     - Since 2026-11-17 requests start at the latest compaction with a summary, so they no
       longer carry what compaction replaced; the session file still grows without bound in
-      a long session. Not yet run live; whether trimming changes cache reads is unverified.
+      a long session. Verified 2026-11-17 (live, one run, Haiku 5.5, trigger 50,000):
+      `TestLiveCompaction` compacted twice in 15 steps, every request after a summary
+      started at the compaction message and was accepted, and the task completed. The
+      first request after each compaction read nothing from the cache and wrote it anew;
+      later requests read the growing trimmed prefix (about 14,000 to 37,000 tokens).
+      Not compared against an untrimmed run, so whether trimming itself changes cache
+      reads is not shown.
