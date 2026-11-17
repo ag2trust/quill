@@ -83,5 +83,6 @@ Lookups, not discussions.
       ignores it and nothing is compacted, so context keeps growing until a later
       compaction succeeds.
     - Compaction on a resumed session has not been run live.
-    - The session file and the request body are never trimmed, so both grow without bound
-      in a long session, and the request will eventually hit the API's request size limit.
+    - Since 2026-11-17 requests start at the latest compaction with a summary, so they no
+      longer carry what compaction replaced; the session file still grows without bound in
+      a long session. Not yet run live; whether trimming changes cache reads is unverified.

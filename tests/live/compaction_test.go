@@ -86,12 +86,34 @@ func parseLiveReply(body []byte) (liveReply, error) {
 	return r, nil
 }
 
+// requestStart returns "role/type" of the first message and its first block.
+func requestStart(rb io.ReadCloser) string {
+	defer rb.Close()
+	var body struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.NewDecoder(rb).Decode(&body); err != nil || len(body.Messages) == 0 {
+		return "unreadable"
+	}
+	m := body.Messages[0]
+	if len(m.Content) == 0 {
+		return m.Role + "/none"
+	}
+	return m.Role + "/" + m.Content[0].Type
+}
+
 // TestLiveCompaction runs the loop in-process, because the trigger is not a
 // flag, with the trigger at the API minimum. The task reads enough text to
 // pass it and then keeps using tools. It checks that the API compacts on a
 // non-streaming request with client tools, that the run continues with the
-// whole history (thinking included) replayed, and that the compaction call is
-// counted in the run's usage.
+// history from the compaction message on (thinking included) replayed, and
+// that the compaction call is counted in the run's usage. Each request after
+// a compaction with a summary starts at the message holding it.
 func TestLiveCompaction(t *testing.T) {
 	live(t)
 	ws, err := filepath.EvalSymlinks(t.TempDir())
@@ -130,7 +152,15 @@ func TestLiveCompaction(t *testing.T) {
 		"read, write codes.txt with the %d codes, one per line, in file order. Then reply done.", files, files)
 
 	var replies []liveReply
+	// starts records, per request, the first message's role and first block
+	// type. Field names only: the body is never logged.
+	var starts []string
 	capture := func(r *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+		if r.GetBody != nil {
+			if rb, gerr := r.GetBody(); gerr == nil {
+				starts = append(starts, requestStart(rb))
+			}
+		}
 		res, err := next(r)
 		if err != nil || res == nil {
 			return res, err
@@ -238,6 +268,20 @@ func TestLiveCompaction(t *testing.T) {
 	}
 	if res.Usage != want {
 		t.Errorf("run usage = %+v, want %+v (top-level plus compaction iterations)", res.Usage, want)
+	}
+	// Every request after the first summary starts at the message holding it.
+	// The run completing shows the API accepted that shape.
+	if len(starts) != len(replies) {
+		t.Errorf("captured %d request starts for %d replies", len(starts), len(replies))
+	} else if replies[compactAt].summary {
+		for i := compactAt + 1; i < len(starts); i++ {
+			if starts[i] != "assistant/compaction" {
+				t.Errorf("request %d starts with %s, want assistant/compaction", i, starts[i])
+			}
+		}
+		for i := compactAt + 1; i < len(replies); i++ {
+			t.Logf("reply %d after the trimmed start: top-level %+v", i, replies[i].top)
+		}
 	}
 	// History stays append-only: the first message and the compaction turn are both still there.
 	if len(loop.History) == 0 || !bytes.Equal(loop.History[0], first) {
