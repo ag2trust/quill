@@ -301,8 +301,8 @@ A caller can give the model extra tools from one MCP server that the caller conf
   `item.completed`, then one `run.completed`. Every line has `type`.
 - `run.started` carries `format` (currently 2), the version of the events, alongside
   `version` (the Quill build). Format 2 (2026-11-10) renamed the `sandbox` field of
-  `run.started` to `tool_profile`. `mcp_tools` and the `mcp_error` status (both
-  2026-11-10) were added without raising `format`.
+  `run.started` to `tool_profile`. Added since without raising `format` (all 2026-11-10):
+  the `mcp_tools` field, the `mcp_error` status, and the `mcp_unavailable` error kind.
 
 Fields in format 2:
 
@@ -310,12 +310,15 @@ Fields in format 2:
 |---|---|
 | `run.started` | `format`; `version`; `session` (the session file path, absent without `--session`); `model`; `effort`; `tool_profile`; `workspace`; `env_passed` (names passed to tools); `mcp_tools` (the session's MCP tool names, empty without MCP) |
 | `item.started` | `item`: a tool call about to run, with `type` `tool_call`, `id`, `name`, and `input` |
-| `item.completed` | `item`: either `type` `message` with `text` (the assistant's text), or `type` `tool_call` with `id`, `name`, `input`, `text` (the output as the model sees it, at most 30,000 bytes), and `is_error` (present only when true) |
+| `item.completed` | `item`: either `type` `message` with `text` (the assistant's text), or `type` `tool_call` with `id`, `name`, `input`, `text` (the output as the model sees it, truncated as described in Tools), and `is_error` |
 | `run.completed` | `status`; `final_text`; `usage` (`input`, `output`, `cache_read`, `cache_write`); `steps`; `duration_ms`; `error` on a failed run; `blocker` on a blocked run |
 
-- `error` has `kind`, `message`, `type` (the API's error type), `request_id`,
-  `http_status`, `retries`, and `retry_after` when the response gave one. Fields that do
-  not apply are empty or 0. `blocker` has `reason`, `summary`, `details`, and `question`
+- Inside `item`, every field except `type` is omitted when it is empty or false: for
+  example, a tool call with empty output has no `text`, and `is_error` appears only when
+  true.
+- `error` has `kind`, `message`, `type` (the API's error type, or `refusal` for `refused`),
+  `request_id`, `http_status`, `retries`, and `retry_after` when the response gave one.
+  Fields that do not apply are empty or 0. `blocker` has `reason`, `summary`, `details`, and `question`
   (see Blockers).
 - A tool call that never started gets no item events: the run stopped first, or the model
   called `raise_blocker` in the same response. A response cut off by `max_tokens` runs
@@ -324,14 +327,16 @@ Fields in format 2:
 Compatibility (2026-11-17):
 
 - `format` is raised when a field or event is removed or renamed, or its meaning changes.
-  Adding a field, an event type, a `status`, or an `error.kind` does not raise it; each
-  addition is recorded in this section with its date.
-- Callers ignore fields and event types they do not know.
+  Adding a field, an event type, an `item` type, a `status`, or an `error.kind` does not
+  raise it; each addition is recorded in this section with its date. A new `status` gets
+  its own exit code in the same change.
+- Callers ignore fields, event types, and `item` types they do not know.
 - A caller treats a `status` or `error.kind` it does not know as a failure and does not
   retry it.
 - A caller that reads a `format` it does not know stops the run with SIGTERM, reports a
   failure, and does not interpret the rest of the output. `run.started` is written before
-  the first model request.
+  the first model request, but that request follows at once, so stopping may not prevent
+  it; stopping prevents the rest of the run.
 
 - Exactly one `run.completed`, always the last line, except after SIGKILL. No `run.completed`
   means Quill crashed, except exit 2, which reports on stderr only. A Go runtime crash also
@@ -352,6 +357,9 @@ Compatibility (2026-11-17):
   same session file if there is one. "No" means a retry would fail the same way, or needs
   a decision first. Quill has already retried transient provider errors inside the run (see
   Provider); how often and how long to wait before a retry is the caller's choice.
+- Without a session file, a retry starts the task over, and tools from the failed run may
+  already have changed the workspace or called the MCP server. Retry then only if no tool
+  ran (no `item.started`), or the task is safe to repeat.
 - No `run.completed` (a crash) is handled like `internal_error`.
 
 | Exit | `status` | Meaning | Retry |
@@ -359,10 +367,10 @@ Compatibility (2026-11-17):
 | 0 | `completed` | Task done | — |
 | 1 | `internal_error` | Bug in Quill | No |
 | 2 | (none, before the run starts) | Bad usage | No |
-| 3 | `limit_reached` | Steps, tokens, or time ran out | No: raising a limit is the caller's decision |
+| 3 | `limit_reached` | Steps, tokens, or time ran out, or the context window is full | No: raising a limit is the caller's decision; the context window cannot be raised |
 | 4 | `provider_error` | See `error.kind` | By `error.kind` |
 | 5 | `blocked` | Waiting for input. See `blocker` | No: answer the blocker, then continue the session |
-| 6 | `mcp_error` | The MCP server could not be used at the start. See MCP | Yes, later. The model was not called; a server whose tools fail the checks fails again |
+| 6 | `mcp_error` | The MCP server could not be used at the start. See MCP | Yes, later, except `http_status` 401 or 403. The model was not called; a server whose tools fail the checks fails again |
 | 143 | `cancelled` | Stopped by SIGTERM, SIGINT or SIGHUP | The caller's decision: the stop came from outside Quill |
 
 - Provider errors are classified from HTTP status and API error type only, never from text.
@@ -375,10 +383,10 @@ Compatibility (2026-11-17):
 | `overloaded` | 500, 529, other 5xx | Yes, later |
 | `network` | Connection failures and timeouts | Yes, later |
 | `model_unavailable` | 404 on the model | No |
-| `bad_request` | 400, 413 | No |
+| `bad_request` | 400, 413, and any other status not listed here | No |
 | `refused` | Stop reason `refusal` | No |
 | `internal` | Status `internal_error` | No |
-| `mcp_unavailable` | Status `mcp_error` (see MCP) | Yes, later |
+| `mcp_unavailable` | Status `mcp_error` (see MCP) | As `mcp_error` |
 
 ### First version scope (2026-11-07)
 
