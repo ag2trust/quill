@@ -10,11 +10,15 @@
 #   4. go vet      — ./..., then the live-tagged tests (compile check only; no key, no API call)
 #   5. go test     — ./... -count=1
 #   6. build       — CGO_ENABLED=0 for linux/amd64, linux/arm64, darwin/arm64
+#   7. govulncheck — ./..., fails on a known vulnerability the code actually calls.
+#                    Needs network: the pinned tool comes from the module proxy
+#                    (unless cached) and the scan queries vuln.go.dev. There is no
+#                    offline skip; an unreachable network fails the gate.
 #
 # Usage:
 #   ./preflight.sh                     # all gates
 #   ./preflight.sh --quick             # gates 1-3 (what the pre-push hook runs)
-#   ./preflight.sh --ci                # gates 2-6 (CI has no branch context)
+#   ./preflight.sh --ci                # gates 2-7 (CI has no branch context)
 #   ./preflight.sh --quick --format-only        # gates 2+3 (tag pushes)
 #   ./preflight.sh --quick --tip=SHA --target=BRANCH   # pre-push hook form
 #
@@ -73,6 +77,10 @@ branch_base() {
   printf 'ok\n'
 }
 
+# Pinned so the gate is reproducible and needs no global install. `go run
+# pkg@version` does not touch go.mod.
+GOVULNCHECK=golang.org/x/vuln/cmd/govulncheck@v1.9.0
+
 # Credential shapes: Anthropic, GitHub, AWS, Slack, private keys.
 SECRET_RE='sk-ant-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{40,}|AKIA[0-9A-Z]{16}|xox[abposr]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
 
@@ -128,5 +136,11 @@ for target in linux/amd64 linux/arm64 darwin/arm64; do
     || fail "build $target"
   printf '%s ok\n' "$target"
 done
+
+printf '=== preflight: govulncheck ===\n'
+# `go run` flattens the tool's exit status, so one message covers both causes.
+go run "$GOVULNCHECK" ./... \
+  || fail "govulncheck: either it reported a vulnerability the code calls (report above; bump the dependency or the Go version), or it could not run (error above; it needs network access to the Go module proxy and vuln.go.dev and is never skipped)"
+printf 'ok\n'
 
 printf 'preflight: all gates passed\n'
