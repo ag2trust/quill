@@ -11,9 +11,11 @@
 #   5. go test     — ./... -count=1
 #   6. build       — CGO_ENABLED=0 for linux/amd64, linux/arm64, darwin/arm64
 #   7. govulncheck — ./..., fails on a known vulnerability the code actually calls.
-#                    Needs network: the pinned tool comes from the module proxy
-#                    (unless cached) and the scan queries vuln.go.dev. There is no
-#                    offline skip; an unreachable network fails the gate.
+#                    Needs network: `go run` checks the pinned tool against the
+#                    module proxy even when it is cached, and the scan queries
+#                    vuln.go.dev. There is no offline skip; an unreachable network
+#                    fails the gate. The vulnerability data is live, so a newly
+#                    published vulnerability can fail the gate with no code change.
 #
 # Usage:
 #   ./preflight.sh                     # all gates
@@ -77,8 +79,8 @@ branch_base() {
   printf 'ok\n'
 }
 
-# Pinned so the gate is reproducible and needs no global install. `go run
-# pkg@version` does not touch go.mod.
+# The tool version is pinned and needs no global install; the vulnerability
+# data is not pinned. `go run pkg@version` does not touch go.mod.
 GOVULNCHECK=golang.org/x/vuln/cmd/govulncheck@v1.9.0
 
 # Credential shapes: Anthropic, GitHub, AWS, Slack, private keys.
