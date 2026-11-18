@@ -46,7 +46,8 @@ handling one prompt is a **run**.
   does not consider it production-ready.
 - Prompt caching is on, using automatic caching. To keep the cache valid, within a session:
   - the model, effort, tools, and system prompt never change;
-  - history is append-only and replayed byte-for-byte, thinking blocks included;
+  - history is append-only and replayed byte-for-byte, thinking blocks included, from the
+    latest compaction with a summary (see below);
   - tool output is truncated deterministically.
 - Transient provider errors (rate limited, overloaded, network) are retried briefly inside
   the run with the SDK's retries, honouring `retry-after`, within `--timeout`. Longer waits and
@@ -55,8 +56,8 @@ handling one prompt is a **run**.
   compaction, a beta (`compact-2026-01-12`). The trigger is fixed at 150,000 input tokens,
   the API default; there is no flag. When it fires, the reply starts with a `compaction`
   block holding a summary, and the API ignores everything before the latest such block.
-  Quill's history stays append-only and is still replayed byte-for-byte, so the session
-  file format is unchanged. The compaction call is billed separately from the reply's
+  Quill's history stays append-only, so the session file format is unchanged and the file
+  keeps every message. The compaction call is billed separately from the reply's
   top-level usage; Quill adds it to the run's usage and to the `--max-tokens` count.
   - It needs a model that supports the beta. The API docs list Claude Fable 5 to 5.2,
     Mythos 5 to 5.2 and Mythos Preview, Opus 4.6 to 4.8, 5 and 5.5, Sonnet 4.6, 5 and 5.5,
@@ -69,6 +70,13 @@ handling one prompt is a **run**.
     instead, and then no summary comes back and nothing is compacted. They also say
     that with custom instructions the summariser sees only the visible conversation, not
     earlier thinking.
+- Requests start at the latest compaction (2026-11-17). Once an assistant message holds a
+  `compaction` block with a summary, each request sends history from that message on, as
+  the API docs allow, so the request no longer carries what compaction replaced. What the
+  model sees is unchanged, because the API ignores everything before that block. A block
+  whose `content` is `null` compacted nothing and is never a starting point. A continued
+  session starts at its latest summary too. The session file still keeps every message
+  and grows with the session; how long a session lives is the caller's choice.
 
 ### Command line (2026-11-07, limit defaults 2026-11-08, `--tools` 2026-11-10)
 

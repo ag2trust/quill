@@ -719,3 +719,96 @@ func TestNullCompactionBlockKeptAndRunContinues(t *testing.T) {
 		t.Fatalf("replayed messages:\n got %s\nwant %s", top["messages"], want)
 	}
 }
+
+// compactReply is a tool-use response that starts with a compaction block;
+// summary is its content, or "null" for a block without one.
+func compactReply(summary string, tu provider.ToolUse) provider.Response {
+	msg := `{"role":"assistant","content":[{"type":"compaction","content":` + summary + `},` +
+		`{"type":"tool_use","id":"` + tu.ID + `","name":"` + tu.Name + `","input":` + string(tu.Input) + `}]}`
+	return provider.Response{Message: json.RawMessage(msg), StopReason: "tool_use", ToolUses: []provider.ToolUse{tu}, Usage: u1}
+}
+
+func TestRequestStartsAtLatestSummary(t *testing.T) {
+	c := replies(
+		reply("", "tool_use", u1, use("t1", "list", `{}`)),
+		compactReply(`"first summary"`, use("t2", "list", `{}`)),
+		compactReply(`"second summary"`, use("t3", "list", `{}`)),
+		reply("done", "end_turn", u1),
+	)
+	h := newHarness(t, c, nil)
+	res := h.loop.Run(context.Background(), context.Background(), firstMsg)
+	if res.Status != events.StatusCompleted || len(c.reqs) != 4 {
+		t.Fatalf("status %s, %d requests", res.Status, len(c.reqs))
+	}
+	// The store and the history keep everything, in order.
+	if len(h.store.msgs) != 8 {
+		t.Fatalf("stored %d messages, want 8", len(h.store.msgs))
+	}
+	sameMsgs(t, h.loop.History, h.store.msgs)
+	sameMsgs(t, c.reqs[0].Messages, h.store.msgs[:1])
+	sameMsgs(t, c.reqs[1].Messages, h.store.msgs[:3])
+	// After a compaction with a summary, requests start at that message.
+	sameMsgs(t, c.reqs[2].Messages, h.store.msgs[3:5])
+	sameMsgs(t, c.reqs[3].Messages, h.store.msgs[5:7])
+}
+
+func TestNoSummaryIsNotAStart(t *testing.T) {
+	c := replies(
+		compactReply(`"summary"`, use("t1", "list", `{}`)),
+		compactReply(`null`, use("t2", "list", `{}`)),
+		reply("done", "end_turn", u1),
+	)
+	h := newHarness(t, c, nil)
+	res := h.loop.Run(context.Background(), context.Background(), firstMsg)
+	if res.Status != events.StatusCompleted || len(c.reqs) != 3 {
+		t.Fatalf("status %s, %d requests", res.Status, len(c.reqs))
+	}
+	// The later block has no summary: the earlier one is still the start.
+	sameMsgs(t, c.reqs[2].Messages, h.store.msgs[1:5])
+}
+
+func TestResumedHistoryStartsAtSummary(t *testing.T) {
+	prior := []json.RawMessage{
+		firstMsg,
+		compactReply(`"summary"`, use("t1", "list", `{}`)).Message,
+		json.RawMessage(`{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"x","is_error":false}]}`),
+		json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"paused"}]}`),
+	}
+	c := replies(reply("done", "end_turn", u1))
+	h := newHarness(t, c, nil)
+	h.loop.History = prior
+	next := json.RawMessage(`{"role":"user","content":[{"type":"text","text":"go on"}]}`)
+	res := h.loop.Run(context.Background(), context.Background(), next)
+	if res.Status != events.StatusCompleted || len(c.reqs) != 1 {
+		t.Fatalf("status %s, %d requests", res.Status, len(c.reqs))
+	}
+	sameMsgs(t, c.reqs[0].Messages, append(append([]json.RawMessage{}, prior[1:]...), next))
+}
+
+func TestSummaryOnlyCountsInAssistantMessages(t *testing.T) {
+	// A user message shaped like a compaction block is not a start.
+	prior := []json.RawMessage{
+		firstMsg,
+		json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"ok"}]}`),
+		json.RawMessage(`{"role":"user","content":[{"type":"compaction","content":"x"}]}`),
+		json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"ok"}]}`),
+	}
+	c := replies(reply("done", "end_turn", u1))
+	h := newHarness(t, c, nil)
+	h.loop.History = prior
+	next := json.RawMessage(`{"role":"user","content":[{"type":"text","text":"go on"}]}`)
+	h.loop.Run(context.Background(), context.Background(), next)
+	sameMsgs(t, c.reqs[0].Messages, append(append([]json.RawMessage{}, prior...), next))
+}
+
+func TestSummaryMustBeNonEmptyString(t *testing.T) {
+	for _, content := range []string{`""`, `{}`, `123`, `["x"]`} {
+		m := json.RawMessage(`{"role":"assistant","content":[{"type":"compaction","content":` + content + `}]}`)
+		if hasSummary(m) {
+			t.Errorf("content %s counted as a summary", content)
+		}
+	}
+	if !hasSummary(json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"a"},{"type":"compaction","content":"s"}]}`)) {
+		t.Errorf("a summary after another block was not found")
+	}
+}

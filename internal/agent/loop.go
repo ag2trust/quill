@@ -39,6 +39,11 @@ type Loop struct {
 	Events   *events.Writer
 	Opts     Options
 	History  []json.RawMessage
+
+	// from is where requests start in History: the latest assistant message
+	// holding a compaction block with a summary. The API ignores everything
+	// before that block, so it is not sent; History and Store keep it.
+	from int
 }
 
 type toolResult struct {
@@ -68,6 +73,13 @@ func (l *Loop) Run(ctx, limitCtx context.Context, next ...json.RawMessage) event
 	defer stop()
 	// Our appends must never write into a caller's backing array.
 	l.History = slices.Clip(l.History)
+	l.from = 0
+	for i := len(l.History) - 1; i > 0; i-- {
+		if hasSummary(l.History[i]) {
+			l.from = i
+			break
+		}
+	}
 
 	var res events.RunCompleted
 	finish := func(s events.Status) events.RunCompleted {
@@ -104,7 +116,7 @@ func (l *Loop) Run(ctx, limitCtx context.Context, next ...json.RawMessage) event
 		}
 		resp, err := l.Client.Step(runCtx, provider.Request{
 			Model: l.Opts.Model, Effort: l.Opts.Effort, System: l.Opts.System,
-			Tools: l.Opts.Tools, Messages: slices.Clip(l.History),
+			Tools: l.Opts.Tools, Messages: slices.Clip(l.History[l.from:]),
 		})
 		if err != nil {
 			if s, ok := interrupted(); ok {
@@ -251,7 +263,33 @@ func (l *Loop) add(m json.RawMessage) error {
 		return err
 	}
 	l.History = append(l.History, m)
+	if hasSummary(m) {
+		l.from = len(l.History) - 1
+	}
 	return nil
+}
+
+// hasSummary reports whether m is an assistant message holding a compaction
+// block with a summary: a non-empty string. A block whose content is null
+// compacted nothing, and the API ignores it, so it is never a starting point.
+func hasSummary(m json.RawMessage) bool {
+	var v struct {
+		Role    string `json:"role"`
+		Content []struct {
+			Type    string          `json:"type"`
+			Content json.RawMessage `json:"content"`
+		} `json:"content"`
+	}
+	if json.Unmarshal(m, &v) != nil || v.Role != "assistant" {
+		return false
+	}
+	for _, b := range v.Content {
+		var summary string
+		if b.Type == "compaction" && json.Unmarshal(b.Content, &summary) == nil && summary != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // emptyContent reports whether assistant message m has no content blocks.
