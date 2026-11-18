@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -8,8 +9,11 @@ import (
 	"testing"
 	"time"
 
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"quill/internal/events"
 	"quill/internal/fakeapi"
+	"quill/internal/fakemcp"
 )
 
 // stopBound is the longest a run may take to end after --timeout. It is the
@@ -18,10 +22,11 @@ const stopBound = 15 * time.Second
 
 // runTimedOut runs quill with a 2s --timeout and checks it ends with
 // limit_reached within stopBound after the timeout, leaving TMPDIR empty.
-func runTimedOut(t *testing.T, fake *fakeapi.Server) {
+func runTimedOut(t *testing.T, fake *fakeapi.Server, args ...string) {
 	t.Helper()
 	tmp := t.TempDir()
-	cmd := quillCmd(fake, tmp, "run it", "exec", "--timeout", "2s", "--workspace", t.TempDir(), "-")
+	args = append(append([]string{"exec", "--timeout", "2s", "--workspace", t.TempDir()}, args...), "-")
+	cmd := quillCmd(fake, tmp, "run it", args...)
 	start := time.Now()
 	out, err := cmd.Output()
 	elapsed := time.Since(start)
@@ -72,4 +77,22 @@ func TestE2ETimeoutDuringRetryWait(t *testing.T) {
 		Header: http.Header{"Retry-After": {"30"}},
 		Body:   `{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`,
 	}))
+}
+
+func TestE2ETimeoutMidMCPCall(t *testing.T) {
+	srv := fakemcp.New(t, fakemcp.Tool{Name: "slow", Call: func(ctx context.Context, _ json.RawMessage) (*sdk.CallToolResult, error) {
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Minute):
+		}
+		return fakemcp.Text("late"), nil
+	}})
+	fake := fakeapi.New(t, fakeapi.ToolReply("tu1", "mcp__slow", `{}`))
+	runTimedOut(t, fake, "--tools", "read-only", "--mcp-url", srv.URL())
+}
+
+func TestE2ETimeoutMidMCPStart(t *testing.T) {
+	srv := fakemcp.New(t, fakemcp.Tool{Name: "echo"})
+	t.Cleanup(srv.Hang())
+	runTimedOut(t, fakeapi.New(t), "--tools", "read-only", "--mcp-url", srv.URL())
 }
