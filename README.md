@@ -420,8 +420,9 @@ Compatibility (2026-11-17):
 - `version` in `run.started` is the tag without the `v`. A build from source reports the
   development version in `internal/events/events.go`.
 - The workflow does not replace a release: it fails if one exists. A fix is a new
-  version. Nothing in the workflow stops someone with write access from deleting a
-  release or moving a tag; that takes a repository rule for `v*` tags.
+  version. The workflow itself cannot stop a tag from being moved or deleted. Repository
+  rules for `v*` tags do (2026-11-20): only an admin can create one, and nobody can move
+  or delete one. Not tried with a real tag yet.
 - Callers pin a version and check the binary against `SHA256SUMS`. The checksums come from
   the same release, so they detect a damaged download, not a compromised release.
 
