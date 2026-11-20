@@ -23,9 +23,9 @@ VERSION=${TAG#v}
 REPO_ROOT=$(git rev-parse --show-toplevel)
 cd "$REPO_ROOT"
 
-# The linker's -X flag silently does nothing when the variable path is wrong.
-# So read the default version from the source, and check after each build that
-# it is gone from the binary.
+# The linker's -X flag silently does nothing when the variable path is wrong,
+# and the default string stays in the binary even when -X applies. So check
+# after each build that the binary has a symbol at exactly that path.
 PKG=quill/internal/events
 DEV=$(sed -n 's/^var Version = "\(.*\)"$/\1/p' internal/events/events.go)
 [ -n "$DEV" ] || { printf 'release.sh: no "var Version" in internal/events/events.go\n' >&2; exit 1; }
@@ -39,10 +39,10 @@ for target in linux/amd64 linux/arm64 darwin/arm64; do
   CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
     -ldflags "-X $PKG.Version=$VERSION" \
     -o "dist/quill-$os-$arch" ./cmd/quill
-  if grep -aqF "$DEV" "dist/quill-$os-$arch"; then
-    printf 'release.sh: quill-%s-%s still has version %s; -X did not apply\n' "$os" "$arch" "$DEV" >&2
+  go tool nm "dist/quill-$os-$arch" | awk -v s="$PKG.Version" '$NF == s { f = 1 } END { exit !f }' || {
+    printf 'release.sh: quill-%s-%s has no symbol %s.Version; -X did not apply\n' "$os" "$arch" "$PKG" >&2
     exit 1
-  fi
+  }
   printf 'built quill-%s-%s\n' "$os" "$arch"
 done
 
