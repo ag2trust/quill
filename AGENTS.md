@@ -28,6 +28,8 @@ caller-specific code, names, or concepts.
 - Never force-push or delete `main`.
 - Commit, push, and open PRs with the default `ag2trust-dev` identity. Never override the
   token or author with a personal account.
+- Only the owner creates `v*` release tags, with the admin role, on a commit on `main`.
+  Agents never push tags. See "Releases" in `README.md`.
 - Use conventional commit subjects (`feat:`, `fix:`, `docs:`, `chore:`, `test:`) and end
   commits with the working session's `Co-Authored-By:` trailer.
 - Review without checking the PR branch out in the shared checkout. Use `gh pr diff`,
