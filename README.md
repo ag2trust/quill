@@ -600,3 +600,7 @@ production workloads.
 
 Adoption planning for each caller lives with that caller, not here. Nothing in Quill may
 depend on it.
+
+## License
+
+MIT. See [`LICENSE`](LICENSE).
