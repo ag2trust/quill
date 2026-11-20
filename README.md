@@ -78,7 +78,7 @@ handling one prompt is a **run**.
   session starts at its latest summary too. The session file still keeps every message
   and grows with the session; how long a session lives is the caller's choice.
 
-### Command line (2026-11-07, limit defaults 2026-11-08, `--tools` 2026-11-10)
+### Command line (2026-11-07, limit defaults 2026-11-08, `--tools` 2026-11-10, `--shell-timeout` 2026-11-20)
 
 Modelled on `codex exec`, OpenAI's headless CLI.
 
@@ -94,6 +94,7 @@ echo "$TASK" | quill exec [flags] -
 | `--effort LEVEL` | Model effort. | `high` |
 | `--tools read-only\|read-write` | Tool profile. `read-only` has no write, edit, or shell tools. | `read-write` |
 | `--max-steps N`, `--max-tokens N`, `--timeout D` | Hard limits for the run. `--max-tokens` counts input, output, and cache-write tokens, not cache reads. | `100`, `2000000`, `30m` |
+| `--shell-timeout D` | Timeout for each shell command (2026-11-20). See Tools. | `10m` |
 | `--session FILE` | Session file to create or continue. See Sessions. | none |
 | `--env NAME` | Pass this environment variable to tools. Repeatable. | none |
 | `--mcp-url URL` | MCP server whose tools the model also gets (2026-11-10). See MCP. | none |
@@ -104,14 +105,16 @@ echo "$TASK" | quill exec [flags] -
 - Flags carry options only. The prompt never goes in argv, where it would be visible in `ps`
   and limited in size.
 
-### Tools (2026-11-07, details 2026-11-08, profile names 2026-11-10)
+### Tools (2026-11-07, details 2026-11-08, profile names 2026-11-10, shell timeout 2026-11-20)
 
 - `read`, `write`, `edit` (exact text), `list`, `glob`, `search`, `shell`, and `raise_blocker`.
   The `read-only` profile has `read`, `list`, `glob`, `search`, and `raise_blocker`.
 - The `shell` description steers the model to the file tools for reading, finding, and
   changing files; it is a nudge, not enforced.
-- Each shell command has a fixed 10-minute timeout. A timed-out command is killed and
-  reported to the model as a tool error; the run continues.
+- Each shell command has the `--shell-timeout` timeout (2026-11-20; a fixed 10 minutes
+  before). It is a run limit like `--timeout`: not stored in the session, so a continued run
+  takes it from the flag. A timed-out command is killed and reported to the model as a tool
+  error; the run continues. `--timeout` still ends the run during a command.
 - Tool input is checked strictly; unknown fields are an error. The schemas are fixed in
   `internal/tools/registry.go`.
 - `read` returns the whole file, or `limit` lines from `offset` (1-based). `write` creates

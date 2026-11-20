@@ -21,7 +21,7 @@ func TestDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.Model != "claude-opus-5-5" || c.Effort != "high" || c.Profile != "read-write" ||
-		c.MaxSteps != 100 || c.MaxTokens != 2000000 || c.Timeout != 30*time.Minute ||
+		c.MaxSteps != 100 || c.MaxTokens != 2000000 || c.Timeout != 30*time.Minute || c.ShellTimeout != 10*time.Minute ||
 		c.Prompt != "fix it" || c.APIKey != "k" {
 		t.Fatalf("unexpected config: %+v", c)
 	}
@@ -87,6 +87,8 @@ func TestUsageErrors(t *testing.T) {
 		{"zero max-steps", []string{"exec", "--max-steps", "0", "x"}, "", keyEnv},
 		{"negative max-tokens", []string{"exec", "--max-tokens", "-1", "x"}, "", keyEnv},
 		{"zero timeout", []string{"exec", "--timeout", "0s", "x"}, "", keyEnv},
+		{"zero shell-timeout", []string{"exec", "--shell-timeout", "0s", "x"}, "", keyEnv},
+		{"negative shell-timeout", []string{"exec", "--shell-timeout", "-1m", "x"}, "", keyEnv},
 		{"session via symlink", []string{"exec", "--workspace", ws, "--session", filepath.Join(link, "s.json"), "x"}, "", keyEnv},
 	}
 	for _, tc := range cases {

@@ -25,8 +25,7 @@ import (
 )
 
 const (
-	shellTimeout = 10 * time.Minute
-	killGrace    = 5 * time.Second
+	killGrace = 5 * time.Second
 )
 
 func main() {
@@ -265,7 +264,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 	}
 
 	runner = proc.NewRunner(cfg.Workspace, env)
-	registry := tools.NewRegistry(tools.Profile(profile), cfg.Workspace, tools.NewShell(runner, shellTimeout))
+	registry := tools.NewRegistry(tools.Profile(profile), cfg.Workspace, tools.NewShell(runner, cfg.ShellTimeout))
 	if remote != nil {
 		registry.SetRemote(remote, mcpTools)
 	}
