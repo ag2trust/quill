@@ -1,7 +1,7 @@
 # Open Questions
 
 Subjects to discuss. Nothing here is decided. See "Decided" in `README.md`; when a question is
-decided, move it there with the date. Started 2026-10-31, last revised 2026-11-17.
+decided, move it there with the date. Started 2026-10-31, last revised 2026-11-18.
 
 "Leaning" is a starting position to challenge, not a decision.
 
@@ -15,11 +15,9 @@ Claude only for now (decided). Remaining:
 ## 2. Interface
 
 Event fields and the `format` compatibility rule were decided 2026-11-17 (see Output in
-`README.md`). Remaining:
+`README.md`); no heartbeat event 2026-11-18 (see Cleanup and stopping). Remaining:
 
-1. Is a heartbeat event needed during a long shell command, so callers can tell a busy run
-   from a hung one?
-2. Should the shell command timeout become a flag, or a parameter the model sets per command?
+1. Should the shell command timeout become a flag, or a parameter the model sets per command?
 
 ## 3. Scope
 

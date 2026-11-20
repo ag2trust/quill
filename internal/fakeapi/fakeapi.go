@@ -8,15 +8,18 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"quill/internal/events"
 )
 
-// Reply is one scripted HTTP response. A zero Status means 200.
+// Reply is one scripted HTTP response. A zero Status means 200. Delay holds
+// the response back, or until the client gives up on the request.
 type Reply struct {
 	Status int
 	Body   string
 	Header http.Header
+	Delay  time.Duration
 }
 
 // Server answers each request with the next scripted reply and records request bodies.
@@ -54,6 +57,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 
+	if reply.Delay > 0 {
+		select {
+		case <-time.After(reply.Delay):
+		case <-r.Context().Done():
+			return
+		}
+	}
 	for k, vs := range reply.Header {
 		for _, v := range vs {
 			w.Header().Add(k, v)

@@ -287,7 +287,7 @@ A caller can give the model extra tools from one MCP server that the caller conf
   is in Quill's process, so a same-user tool can read it, exactly like the API key. The
   caller should make it per-run and narrowly scoped.
 
-### Cleanup and stopping (2026-11-07)
+### Cleanup and stopping (2026-11-07, no heartbeat 2026-11-18)
 
 - Each shell command runs in its own process group, tracked by Quill.
 - On SIGTERM, SIGINT, SIGHUP, or run timeout, Quill stops every command group (SIGTERM, then
@@ -299,8 +299,17 @@ A caller can give the model extra tools from one MCP server that the caller conf
   left without a result "interrupted: it may have partly run".
 - Quill removes everything it created: processes, temporary files, and temporary directories.
   The agent's changes to the workspace are the result of the task and stay.
-- Callers stop Quill with SIGTERM, and SIGKILL only if it has not exited after about 10
-  seconds. SIGKILL cannot be caught; the container is the last backstop.
+- No heartbeat event (2026-11-18). Quill can write nothing for minutes, during a shell
+  command, an MCP call, or an API request, so a caller cannot tell a hang from silence.
+  Instead, every wait ends by `--timeout`: shell commands, MCP start and calls, API
+  requests, and retry waits. Quill then stops as above. The clock starts once the prompt is
+  read, so a caller must close stdin, and must keep reading stdout so Quill can write its
+  events. Tests check each of these waits ends within 15 seconds after `--timeout`, also
+  when a command ignores SIGTERM. A caller's watchdog sends SIGTERM at `--timeout` plus 15
+  seconds, then follows the next rule.
+- Callers stop Quill with SIGTERM, and SIGKILL only if it has not exited after 15 seconds
+  (raised from about 10 on 2026-11-18: the waits in Quill's stop path add up to about 11).
+  SIGKILL cannot be caught; the container is the last backstop.
 
 ### Output (2026-11-07, `format` 2026-11-10, fields and compatibility 2026-11-17)
 
