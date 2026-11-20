@@ -414,13 +414,14 @@ Compatibility (2026-11-17):
   `v0.2.0-rc.1`, is a pre-release. Pushing the tag runs the Release workflow
   (`.github/workflows/release.yml`), which checks that the commit is on `main`, runs the
   CI gate, builds with `release.sh`, and publishes a GitHub release.
-- Each release has three static binaries, `quill-linux-amd64`, `quill-linux-arm64`, and
-  `quill-darwin-arm64`, and `SHA256SUMS`. There are no archives, installers, container
+- Each release has three binaries built without cgo, `quill-linux-amd64`,
+  `quill-linux-arm64`, and `quill-darwin-arm64`, and `SHA256SUMS`. There are no archives, installers, container
   images, or signatures.
 - `version` in `run.started` is the tag without the `v`. A build from source reports the
   development version in `internal/events/events.go`.
-- A published version is never rebuilt or replaced: the workflow fails if the release
-  exists. A fix is a new version.
+- The workflow does not replace a release: it fails if one exists. A fix is a new
+  version. Nothing in the workflow stops someone with write access from deleting a
+  release or moving a tag; that takes a repository rule for `v*` tags.
 - Callers pin a version and check the binary against `SHA256SUMS`. The checksums come from
   the same release, so they detect a damaged download, not a compromised release.
 

@@ -23,14 +23,26 @@ VERSION=${TAG#v}
 REPO_ROOT=$(git rev-parse --show-toplevel)
 cd "$REPO_ROOT"
 
+# The linker's -X flag silently does nothing when the variable path is wrong.
+# So read the default version from the source, and check after each build that
+# it is gone from the binary.
+PKG=quill/internal/events
+DEV=$(sed -n 's/^var Version = "\(.*\)"$/\1/p' internal/events/events.go)
+[ -n "$DEV" ] || { printf 'release.sh: no "var Version" in internal/events/events.go\n' >&2; exit 1; }
+[ "$DEV" != "$VERSION" ] || { printf 'release.sh: %s is the development version\n' "$VERSION" >&2; exit 1; }
+
 rm -rf dist
 mkdir dist
 for target in linux/amd64 linux/arm64 darwin/arm64; do
   os=${target%/*}
   arch=${target#*/}
   CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
-    -ldflags "-X quill/internal/events.Version=$VERSION" \
+    -ldflags "-X $PKG.Version=$VERSION" \
     -o "dist/quill-$os-$arch" ./cmd/quill
+  if grep -aqF "$DEV" "dist/quill-$os-$arch"; then
+    printf 'release.sh: quill-%s-%s still has version %s; -X did not apply\n' "$os" "$arch" "$DEV" >&2
+    exit 1
+  fi
   printf 'built quill-%s-%s\n' "$os" "$arch"
 done
 
