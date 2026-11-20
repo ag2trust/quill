@@ -96,3 +96,30 @@ func TestE2ETimeoutMidMCPStart(t *testing.T) {
 	t.Cleanup(srv.Hang())
 	runTimedOut(t, fakeapi.New(t), "--tools", "read-only", "--mcp-url", srv.URL())
 }
+
+// --shell-timeout kills a long command; the model sees a tool error and the
+// run continues.
+func TestE2EShellTimeoutFlag(t *testing.T) {
+	const marker = "sleep 31.87"
+	t.Cleanup(func() { exec.Command("pkill", "-f", marker).Run() })
+	input, _ := json.Marshal(map[string]string{"command": marker})
+	fake := fakeapi.New(t,
+		fakeapi.ToolReply("tu1", "shell", string(input)),
+		fakeapi.TextReply("done", events.Usage{}),
+	)
+	start := time.Now()
+	r := runQuill(t, fake, "task", "--workspace", t.TempDir(), "--shell-timeout", "1s")
+	if l := last(t, r); r.code != 0 || l["status"] != "completed" {
+		t.Fatalf("exit = %d, run.completed = %v; stderr: %s", r.code, l, r.stderr)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Errorf("run took %v with --shell-timeout 1s", elapsed)
+	}
+	res := toolResults(t, fake.Requests()[1])
+	if len(res) != 1 || !res[0].IsError || res[0].Content != "[killed after 1s timeout]" {
+		t.Errorf("shell result = %+v", res)
+	}
+	if exec.Command("pgrep", "-f", marker).Run() == nil {
+		t.Errorf("%q survived the timeout", marker)
+	}
+}

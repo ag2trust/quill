@@ -22,6 +22,7 @@ type Config struct {
 	MaxSteps         int
 	MaxTokens        int64
 	Timeout          time.Duration
+	ShellTimeout     time.Duration
 	EnvNames         []string
 	// Explicit holds the names of flags the caller set.
 	Explicit map[string]bool
@@ -65,6 +66,7 @@ func Parse(args []string, stdin io.Reader, getenv func(string) string) (Config, 
 	fs.IntVar(&c.MaxSteps, "max-steps", 100, "")
 	fs.Int64Var(&c.MaxTokens, "max-tokens", 2000000, "")
 	fs.DurationVar(&c.Timeout, "timeout", 30*time.Minute, "")
+	fs.DurationVar(&c.ShellTimeout, "shell-timeout", 10*time.Minute, "")
 	fs.StringVar(&session, "session", "", "")
 	fs.Var(&envs, "env", "")
 	fs.StringVar(&mcpURL, "mcp-url", "", "")
@@ -101,8 +103,8 @@ func Parse(args []string, stdin io.Reader, getenv func(string) string) (Config, 
 		return Config{}, usagef("prompt is empty")
 	}
 
-	if c.MaxSteps <= 0 || c.MaxTokens <= 0 || c.Timeout <= 0 {
-		return Config{}, usagef("--max-steps, --max-tokens and --timeout must be greater than zero")
+	if c.MaxSteps <= 0 || c.MaxTokens <= 0 || c.Timeout <= 0 || c.ShellTimeout <= 0 {
+		return Config{}, usagef("--max-steps, --max-tokens, --timeout and --shell-timeout must be greater than zero")
 	}
 	switch c.Effort {
 	case "low", "medium", "high", "xhigh", "max":
