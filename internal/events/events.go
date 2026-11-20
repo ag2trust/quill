@@ -9,8 +9,9 @@ import (
 	"sync"
 )
 
-// Version is the quill version reported in run.started.
-const Version = "0.1.0-dev"
+// Version is the quill version reported in run.started. Release builds set
+// it with -ldflags -X (see release.sh).
+var Version = "0.1.0-dev"
 
 // Format is the event interface version reported in run.started. Raise it on
 // an incompatible change to the events.

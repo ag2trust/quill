@@ -408,6 +408,22 @@ Compatibility (2026-11-17):
 | `internal` | Status `internal_error` | No |
 | `mcp_unavailable` | Status `mcp_error` (see MCP) | As `mcp_error` |
 
+### Releases (2026-11-20)
+
+- A release is a tag `vX.Y.Z` on a commit that is on `main`; a tag with a suffix, such as
+  `v0.2.0-rc.1`, is a pre-release. Pushing the tag runs the Release workflow
+  (`.github/workflows/release.yml`), which checks that the commit is on `main`, runs the
+  CI gate, builds with `release.sh`, and publishes a GitHub release.
+- Each release has three static binaries, `quill-linux-amd64`, `quill-linux-arm64`, and
+  `quill-darwin-arm64`, and `SHA256SUMS`. There are no archives, installers, container
+  images, or signatures.
+- `version` in `run.started` is the tag without the `v`. A build from source reports the
+  development version in `internal/events/events.go`.
+- A published version is never rebuilt or replaced: the workflow fails if the release
+  exists. A fix is a new version.
+- Callers pin a version and check the binary against `SHA256SUMS`. The checksums come from
+  the same release, so they detect a damaged download, not a compromised release.
+
 ### First version scope (2026-11-07)
 
 - One autonomous coding task per run, in a git workspace, using the tools above.
