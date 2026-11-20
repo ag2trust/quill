@@ -102,10 +102,12 @@ func parse(t *testing.T, stdout string) []map[string]any {
 	return lines
 }
 
-// run runs quill to completion and logs its run.completed line.
-func run(t *testing.T, bin, prompt, ws, sess string) result {
+// run runs quill to completion and logs its run.completed line. extraEnv is
+// added to quill's environment.
+func run(t *testing.T, bin, prompt, ws, sess string, extraEnv ...string) result {
 	t.Helper()
 	cmd := quillCmd(bin, prompt, ws, sess)
+	cmd.Env = append(cmd.Env, extraEnv...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
