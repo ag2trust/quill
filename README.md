@@ -1,22 +1,132 @@
 # Quill
 
-Status: proof of concept, built 2026-11-08. Started 2026-10-31 as a handoff for the next
-agent. Not ready for production; see the safety baseline.
+[![CI](https://github.com/ag2trust/quill/actions/workflows/ci.yml/badge.svg)](https://github.com/ag2trust/quill/actions/workflows/ci.yml)
 
-This repository is public. Never commit API keys, tokens, customer data, or run transcripts.
+**A small, headless coding agent for Claude.** Give Quill a task and a directory. It works
+with the model until the task is done, then tells you what happened in JSON.
 
-Open questions are in [`DISCUSSION.md`](DISCUSSION.md). Anything not listed under "Decided"
-below is a proposal, not a decision. When a question is decided, move it here with the date.
+Quill has no user interface. It is made to be started by another program: one process, one
+task, a stream of events on stdout, and an exit code you can rely on.
 
-## What this is
+> **Status: proof of concept.** Quill was built on 2026-11-08 and works end to end, but it
+> is not ready for production. Its shell tool runs commands as your user, so run it in a
+> container or on code you trust. See the [safety baseline](#proposed-safety-baseline).
 
-A very basic, headless coding-agent CLI with no user interface. A program launches it as a
-separate process, gives it a task, and reads the result.
+## Contents
+
+- [How it works](#how-it-works)
+- [Quick start](#quick-start)
+- [What Quill does](#what-quill-does)
+- [Why](#why)
+- [Finding your way around](#finding-your-way-around)
+- [Contributing](#contributing)
+- [Decided](#decided): the full specification
+- [Proposed safety baseline](#proposed-safety-baseline)
+- [Prior art](#prior-art-headless-cli-interfaces)
+
+## How it works
 
 Quill is a harness: an API client running a loop. It sends the model the task and the
 available tools, runs the tool the model requests, returns the result, and repeats until the
 model finishes or a limit is hit. One pass through that loop is a **step**. One Quill process
 handling one prompt is a **run**.
+
+```mermaid
+sequenceDiagram
+    participant C as Your program
+    participant Q as quill exec
+    participant M as Claude API
+    participant T as Tools (files, shell)
+    C->>Q: task on stdin, flags
+    Q-->>C: run.started
+    loop One step, until the model finishes or a limit is hit
+        Q->>M: task, history, tools
+        M-->>Q: text and tool calls
+        Q->>T: run each tool
+        T-->>Q: result
+        Q-->>C: item events
+    end
+    Q-->>C: run.completed, then the exit code
+```
+
+## Quick start
+
+You need Go 1.26.11 or later and an Anthropic API key.
+
+```bash
+git clone https://github.com/ag2trust/quill
+cd quill
+go build -o quill ./cmd/quill
+export ANTHROPIC_API_KEY=...   # the only place Quill reads the key from
+```
+
+Start with a read-only run. With `--tools read-only` the model can read and search the
+workspace, but has no write, edit, or shell tools:
+
+```bash
+echo "Explain what this repository does" \
+  | ./quill exec --tools read-only --workspace /path/to/repo -
+```
+
+Quill writes one JSON event per line. Abridged, a run looks like this:
+
+```text
+{"type":"run.started","format":2,"model":"claude-opus-5-5","effort":"high","tool_profile":"read-only", ...}
+{"type":"item.started","item":{"type":"tool_call","id":"toolu_01...","name":"read","input":{"path":"README.md"}}}
+{"type":"item.completed","item":{"type":"tool_call","id":"toolu_01...","name":"read","input":{"path":"README.md"},"text":"# ..."}}
+{"type":"item.completed","item":{"type":"message","text":"This repository is ..."}}
+{"type":"run.completed","status":"completed","final_text":"This repository is ...","usage":{...},"steps":2,"duration_ms":8400}
+```
+
+To print only the answer, pick `final_text` from the last event:
+
+```bash
+echo "Explain what this repository does" \
+  | ./quill exec --tools read-only --workspace /path/to/repo - \
+  | jq -r 'select(.type == "run.completed") | .final_text'
+```
+
+To let Quill change code, leave out `--tools read-only`. The default profile, `read-write`,
+adds the write, edit, and shell tools. Quill does not sandbox them: the container you run
+it in is the sandbox.
+
+```bash
+echo "Fix the failing test in ./internal/parser" \
+  | ./quill exec --workspace /path/to/repo --session "$HOME/fix-parser.jsonl" -
+```
+
+`--session` keeps the conversation in a file outside the workspace, so a later run with
+the same file continues where this one stopped.
+
+A model run costs money. Every run is capped by `--max-steps`, `--max-tokens`, and
+`--timeout`; the defaults are in [Decided](#decided), under Command line.
+
+## What Quill does
+
+- **Eight tools.** `read`, `write`, `edit`, `list`, `glob`, `search`, `shell`, and
+  `raise_blocker`. The `read-only` profile leaves out `write`, `edit`, and `shell`.
+- **Events you can parse.** stdout is always JSON lines: one `run.started`, the tool calls
+  and messages as they happen, and exactly one `run.completed` with the status, the final
+  text, and token usage.
+- **Typed outcomes.** Each `status` has its own exit code, and provider failures carry an
+  `error.kind` that says whether a retry makes sense. Callers never match error text.
+- **Hard limits.** Steps, tokens, run time, and the time of each shell command are capped.
+  Every wait ends by `--timeout`.
+- **Sessions.** Quill is stateless. A session file lets a new run continue an earlier one,
+  including after a crash or a stop.
+- **Blockers.** When the task is unclear or conflicts with the repository's rules, the
+  model stops and asks instead of guessing. The run ends with status `blocked`, and the
+  caller answers by continuing the session.
+- **Repository instructions.** `AGENTS.md` and `CLAUDE.md` in the workspace root are given
+  to the model as repository content.
+- **Extra tools over MCP.** `--mcp-url` adds the tools of one MCP server that the caller
+  configures.
+- **Long runs.** Prompt caching and context compaction are always on.
+
+Each of these is specified under [Decided](#decided).
+
+What Quill leaves out on purpose: a terminal UI, chat, permission prompts, plugins,
+subagents, web search, and orchestration. Orchestration belongs to the caller.
 
 ## Why
 
@@ -25,7 +135,33 @@ handling one prompt is a **run**.
   redistribute.
 - Typed failures, so callers never have to match CLI error text.
 
+## Finding your way around
+
+| Where | What |
+|---|---|
+| [Decided](#decided), below | The specification. Every decision, with its date. |
+| [`DISCUSSION.md`](DISCUSSION.md) | Open questions. Nothing there is decided. |
+| [`AGENTS.md`](AGENTS.md) | Rules and workflow for contributors, human or agent. |
+| `cmd/quill` | The command and its end-to-end tests. |
+| `internal/` | The agent loop, tools, sessions, events, provider, and MCP client. |
+| `tests/live` | Tests that call the real API. They cost money and need the owner's approval. |
+
+## Contributing
+
+- This repository is public. Never commit API keys, tokens, customer data, or run
+  transcripts.
+- Work on a branch from `main` and open a pull request. Run `./preflight.sh` before you
+  push; CI runs the same checks.
+- Keep the scope small. Quill has no convenience features, and it knows nothing about the
+  programs that call it.
+- [`AGENTS.md`](AGENTS.md) has the full workflow.
+
 ## Decided
+
+This is the specification. The sections above are an overview of it; where they differ,
+this section is right. Open questions are in [`DISCUSSION.md`](DISCUSSION.md). Anything not
+listed here is a proposal, not a decision. When a question is decided, move it here with
+the date.
 
 ### Foundations (2026-10-31)
 
