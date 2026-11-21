@@ -567,6 +567,39 @@ Compatibility (2026-11-17):
 - Callers pin a version and check the binary against `SHA256SUMS`. The checksums come from
   the same release, so they detect a damaged download, not a compromised release.
 
+### Adversarial suite (2026-11-21)
+
+- `tests/adversarial` is the permanent suite of the safety baseline. A scripted fake API
+  plays a hostile model against a `quill` binary built like the release ones (static,
+  without cgo). It runs in `go test ./...`, so `./preflight.sh`, CI, and the Release
+  workflow run it: a failure fails CI and blocks a release. CI is not a required check
+  on `main`, so it does not by itself block a merge.
+- Cases: path escape (`..`, absolute paths, and symlinked files and directories with
+  absolute, relative, and dangling targets) with each file tool, though not every tool
+  with every route; secret theft (the API key and variables not passed with `--env`, through
+  the shell, and repository instructions symlinked outside the workspace); calls outside
+  the tool profile, unknown tools, and malformed input; a hostile repository (a git config
+  that would run a command if Quill ran `git`, and text posing as instructions, which must
+  stay out of the system prompt).
+- Every case also checks that nothing changed in the planted directory beside the
+  workspace and that none of the planted secrets reached the model. It does not watch
+  the rest of the file system. Cases where a tool may succeed also check that it did
+  something, so an empty result cannot pass for a safe one, and the git case first shows
+  that git itself runs the planted command.
+- Breaks made by hand on 2026-11-21 each failed at least one case: no path checks, no
+  symlink check, the environment or the key passed to tools, the profile not enforced,
+  Quill running `git`, and `AGENTS.md` in the system prompt. Removing only the check
+  before symlinks are resolved failed nothing, because the check after it refuses the
+  same paths.
+- Not covered: the MCP token (`QUILL_MCP_TOKEN`) reaching tools in a run with
+  `--mcp-url`; unit tests cover the environment rules.
+- The suite tests what Quill enforces, not how the model behaves. A tool running as the
+  same user can still read the key from Quill's process; the caller's proxy closes that
+  gap (see "API key in production"), and the suite does not test it.
+- Live prompt-injection runs, where a real model meets hostile repository content, are
+  recorded but do not block a release. They run before each release with the owner's
+  approval. Their cases are not written yet.
+
 ### First version scope (2026-11-07)
 
 - One autonomous coding task per run, in a git workspace, using the tools above.
@@ -593,7 +626,8 @@ Compatibility (2026-11-17):
 - No prompts, file contents, or secrets in logs. The stdout event stream is the caller's
   data, not a log.
 - Pinned dependencies, few of them, and `govulncheck`.
-- A permanent adversarial suite: prompt injection, path escape, and secret theft.
+- A permanent adversarial suite: prompt injection, path escape, and secret theft. Decided
+  2026-11-21; see "Adversarial suite".
 
 ## Prior art: headless CLI interfaces
 
