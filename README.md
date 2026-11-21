@@ -567,6 +567,31 @@ Compatibility (2026-11-17):
 - Callers pin a version and check the binary against `SHA256SUMS`. The checksums come from
   the same release, so they detect a damaged download, not a compromised release.
 
+### Adversarial suite (2026-11-21)
+
+- `tests/adversarial` is the permanent suite of the safety baseline. A scripted fake API
+  plays a hostile model against the built `quill` binary. It runs in `go test ./...`, so
+  `./preflight.sh`, CI, and the Release workflow run it: a failure blocks a PR and a
+  release.
+- Cases: path escape with every file tool (`..`, absolute paths, symlinked files and
+  directories); secret theft (the API key and variables not passed with `--env`, through
+  the shell, and repository instructions symlinked outside the workspace); calls outside
+  the tool profile, unknown tools, and malformed input; a hostile repository (a git config
+  that would run a command if Quill ran `git`, and text posing as instructions, which must
+  stay out of the system prompt).
+- Every case also checks that nothing outside the workspace changed and that none of the
+  planted secrets reached the model.
+- Each case was checked against a deliberately broken Quill (2026-11-21): no path checks,
+  no symlink check, the environment or the key passed to tools, the profile not enforced,
+  Quill running `git`, and `AGENTS.md` in the system prompt. Each break failed at least
+  one case.
+- The suite tests what Quill enforces, not how the model behaves. A tool running as the
+  same user can still read the key from Quill's process; the caller's proxy closes that
+  gap (see "API key in production"), and the suite does not test it.
+- Live prompt-injection runs, where a real model meets hostile repository content, are
+  recorded but do not block a release. They run before each release with the owner's
+  approval. Their cases are not written yet.
+
 ### First version scope (2026-11-07)
 
 - One autonomous coding task per run, in a git workspace, using the tools above.
@@ -593,7 +618,8 @@ Compatibility (2026-11-17):
 - No prompts, file contents, or secrets in logs. The stdout event stream is the caller's
   data, not a log.
 - Pinned dependencies, few of them, and `govulncheck`.
-- A permanent adversarial suite: prompt injection, path escape, and secret theft.
+- A permanent adversarial suite: prompt injection, path escape, and secret theft. Decided
+  2026-11-21; see "Adversarial suite".
 
 ## Prior art: headless CLI interfaces
 

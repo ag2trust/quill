@@ -1,7 +1,7 @@
 # Open Questions
 
 Subjects to discuss. Nothing here is decided. See "Decided" in `README.md`; when a question is
-decided, move it there with the date. Started 2026-10-31, last revised 2026-11-20.
+decided, move it there with the date. Started 2026-10-31, last revised 2026-11-21.
 
 "Leaning" is a starting position to challenge, not a decision.
 
@@ -27,12 +27,14 @@ model, capped by the flag, could be added later.
 
 ## 4. Safety
 
+The adversarial suite was decided 2026-11-21 (see "Adversarial suite" in `README.md`); its
+live, non-blocking injection cases are not written yet.
+
 1. What network access do tools get? Must package installs and test services be reachable?
 2. How is the workspace boundary enforced in Quill and in the container?
-3. What does the adversarial test suite contain, and does it block every release?
-4. Who performs independent security review?
-5. What may be logged, and how long are logs retained?
-6. Which actions need a hard block in every profile, for example pushing to Git?
+3. Who performs independent security review?
+4. What may be logged, and how long are logs retained?
+5. Which actions need a hard block in every profile, for example pushing to Git?
 
 ## 5. To verify
 
