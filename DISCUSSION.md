@@ -53,9 +53,14 @@ Lookups, not discussions.
    varies with load, so streaming stays the fix if timeouts appear. The SDK estimates 15
    minutes for 32,000 tokens and refuses non-streaming requests over 10 minutes unless a
    request timeout is set, as Quill does.
-7. After an empty `end_turn` or a `refusal`, does resuming the session work? Quill saves
-   neither turn, so the next request may hold two consecutive user messages. Item 5 shows
-   the API accepts that shape; neither stop has been triggered live.
+7. Verified 2026-11-20 (live, one run each, Haiku 5.5, low effort): resuming works after
+   a `refusal` and after an empty `end_turn`. Neither stop can be produced on demand, so
+   `TestLiveResumeAfterRefusal` and `TestLiveResumeAfterEmptyEndTurn` answer one request
+   with a synthetic reply through a local proxy and send every other request to the API.
+   Quill saved neither turn. After a refusal of the first step, the resume sent two
+   consecutive user text messages; after an empty `end_turn` that followed a tool call, it
+   sent the tool result and then the prompt. The API accepted both and the tasks
+   completed. A real refusal was not seen.
 8. Verified 2026-11-08 (live): automatic prompt caching produces cache reads (about 9,800
    tokens read on the second step of `TestLiveCacheReads`).
 9. Verified 2026-11-10 (live, one run, Haiku 5.5, high effort, trigger lowered to the
@@ -80,7 +85,12 @@ Lookups, not discussions.
       present) has not been seen live. Quill keeps and replays it; the docs say the API
       ignores it and nothing is compacted, so context keeps growing until a later
       compaction succeeds.
-    - Compaction on a resumed session has not been run live.
+    - Verified 2026-11-20 (live, one run, Haiku 5.5, high effort, trigger 50,000):
+      `TestLiveCompactionResumed` ran three tasks on one session file. The first stayed
+      under the trigger. The second, a resume, compacted, and every later request started
+      at the compaction message. The third resumed a session that already held a
+      compaction: every request started at the saved summary, and the task completed with
+      all 12 codes.
     - Since 2026-11-17 requests start at the latest compaction with a summary, so they no
       longer carry what compaction replaced; the session file still grows without bound in
       a long session. Verified 2026-11-17 (live, one run, Haiku 5.5, trigger 50,000):
