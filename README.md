@@ -51,7 +51,10 @@ sequenceDiagram
 
 ## Quick start
 
-You need Go 1.26.11 or later and an Anthropic API key.
+Static binaries for linux/amd64, linux/arm64, and darwin/arm64 are on the
+[releases page](https://github.com/ag2trust/quill/releases), with `SHA256SUMS`; see
+[Releases](#releases-2026-11-20). To build from source, you need Go 1.26.11 or later. Either
+way, you need an Anthropic API key.
 
 ```bash
 git clone https://github.com/ag2trust/quill
@@ -558,7 +561,9 @@ Compatibility (2026-11-17):
 - The workflow does not replace a release: it fails if one exists. A fix is a new
   version. The workflow itself cannot stop a tag from being moved or deleted. Repository
   rules for `v*` tags do (2026-11-20): only an admin can create one, and nobody can move
-  or delete one. Not tried with a real tag yet.
+  or delete one. Pushing `v0.1.0` (2026-11-20) showed the creation rule applies and the
+  admin bypasses it. A push without admin, and moving or deleting a tag, have not been
+  tried.
 - Callers pin a version and check the binary against `SHA256SUMS`. The checksums come from
   the same release, so they detect a damaged download, not a compromised release.
 
